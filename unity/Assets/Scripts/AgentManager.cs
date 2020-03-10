@@ -89,32 +89,17 @@ public class AgentManager : MonoBehaviour
 
 	private void initializePrimaryAgent() {
 
-		GameObject fpsController = GameObject.FindObjectOfType<BaseFPSAgentController>().gameObject;
-		primaryAgent = fpsController.GetComponent<PhysicsRemoteFPSAgentController>();
-		primaryAgent.enabled = true;
+		GameObject fpsController = GameObject.Find("FPSController");
+		PhysicsRemoteFPSAgentController physicsAgent = fpsController.GetComponent<PhysicsRemoteFPSAgentController>();
+		primaryAgent = physicsAgent;
 		primaryAgent.agentManager = this;
+		primaryAgent.enabled = true;
 		primaryAgent.actionComplete = true;
+
 	}
 	
 	public void Initialize(ServerAction action)
 	{
-        if (action.agentType != null && action.agentType.ToLower() == "stochastic") {
-            this.agents.Clear();
-
-            // stochastic must not snap to grid to work properly
-            action.snapToGrid = false;
-
-            GameObject fpsController = GameObject.FindObjectOfType<BaseFPSAgentController>().gameObject;
-            primaryAgent.enabled = false;
-
-            primaryAgent = fpsController.GetComponent<StochasticRemoteFPSAgentController>();
-            primaryAgent.agentManager = this;
-            primaryAgent.enabled = true;
-            // must manually call start here since it this only gets called before Update() is called
-            primaryAgent.Start();
-            this.agents.Add(primaryAgent);
-        }
-        
 		primaryAgent.ProcessControlCommand (action);
 		primaryAgent.IsVisible = action.makeAgentsVisible;
 		this.renderClassImage = action.renderClassImage;
@@ -166,25 +151,6 @@ public class AgentManager : MonoBehaviour
 		this.thirdPartyCameras.Add(camera);
 		gameObject.transform.eulerAngles = action.rotation;
 		gameObject.transform.position = action.position;
-
-        float fov;
-
-        if(action.fieldOfView <= 0 || action.fieldOfView > 180)
-        {
-            //default to 90 fov on third party camera if nothing passed in, or if value is too large
-            fov = 90f;
-        }
-        else
-        {
-            fov = action.fieldOfView;
-        }
-        if (action.orthographic) {
-            camera.orthographicSize = action.fieldOfView;
-        }
-        camera.orthographic = action.orthographic;
-
-        camera.fieldOfView = fov;
-
 		readyToEmit = true;
 	}
 
@@ -201,7 +167,7 @@ public class AgentManager : MonoBehaviour
 		Vector3 clonePosition = new Vector3(action.x, action.y, action.z);
 
 		//disable ambient occlusion on primary agetn because it causes issues with multiple main cameras
-		//primaryAgent.GetComponent<PhysicsRemoteFPSAgentController>().DisableScreenSpaceAmbientOcclusion();
+		primaryAgent.GetComponent<PhysicsRemoteFPSAgentController>().DisableScreenSpaceAmbientOcclusion();
 
 		BaseFPSAgentController clone = UnityEngine.Object.Instantiate (primaryAgent);
 		clone.IsVisible = action.makeAgentsVisible;
@@ -398,7 +364,7 @@ public class AgentManager : MonoBehaviour
 				Debug.LogError ("Depth image not available - returning empty image");
 			}
 
-			byte[] bytes = agent.imageSynthesis.Encode ("_depth", RenderTextureFormat.Default, RenderTextureReadWrite.Linear);
+			byte[] bytes = agent.imageSynthesis.Encode ("_depth");
 			form.AddBinaryData ("image_depth", bytes);
 		}
 	}
@@ -521,7 +487,6 @@ public class AgentManager : MonoBehaviour
 
 		ThirdPartyCameraMetadata[] cameraMetadata = new ThirdPartyCameraMetadata[this.thirdPartyCameras.Count];
 		RenderTexture currentTexture = null;
-        JavaScriptInterface jsInterface = null;
         if (shouldRender) {
             currentTexture = RenderTexture.active;
             for (int i = 0; i < this.thirdPartyCameras.Count; i++) {
@@ -543,7 +508,6 @@ public class AgentManager : MonoBehaviour
 
         for (int i = 0; i < this.agents.Count; i++) {
             BaseFPSAgentController agent = this.agents.ToArray () [i];
-            jsInterface = agent.GetComponent<JavaScriptInterface>();
             MetadataWrapper metadata = agent.generateMetadataWrapper ();
             metadata.agentId = i;
             // we don't need to render the agent's camera for the first agent
@@ -564,18 +528,8 @@ public class AgentManager : MonoBehaviour
             RenderTexture.active = currentTexture;
         }
 
-        var serializedMetadata = Newtonsoft.Json.JsonConvert.SerializeObject(multiMeta);
-		#if UNITY_WEBGL
-
-				// JavaScriptInterface jsI =  FindObjectOfType<JavaScriptInterface>();
-				// jsInterface.SendAction(new ServerAction(){action = "Test"});
-                if (jsInterface != null) {
-					jsInterface.SendActionMetadata(serializedMetadata);
-				}
-        #endif
-
         //form.AddField("metadata", JsonUtility.ToJson(multiMeta));
-        form.AddField("metadata", serializedMetadata);
+        form.AddField("metadata", Newtonsoft.Json.JsonConvert.SerializeObject(multiMeta));
         form.AddField("token", robosimsClientToken);
 
         #if !UNITY_WEBGL 
@@ -941,7 +895,6 @@ public struct MetadataWrapper
 public class ServerAction
 {
 	public string action;
-    public string agentMode = "tall"; //default to Tall version of Agent
 	public int agentCount = 1;
 	public string quality;
 	public bool makeAgentsVisible = true;
@@ -956,7 +909,7 @@ public class ServerAction
 	public int agentId;
 	public int thirdPartyCameraId;
 	public float y;
-	public float fieldOfView;
+	public float fieldOfView = 60f;
 	public float x;
 	public float z;
     public float pushAngle;
@@ -967,13 +920,8 @@ public class ServerAction
     public float handDistance;//used for max distance agent's hand can move
 	public List<Vector3> positions = null;
 	public bool standing = true;
+	public float fov = 60.0f;
 	public bool forceAction;
-    public bool applyActionNoise = true;
-    public float movementGaussianMu;
-    public float movementGaussianSigma;
-    public float rotateGaussianMu;
-    public float rotateGaussianSigma;
-
 
 	public bool forceKinematic;
 
@@ -982,6 +930,7 @@ public class ServerAction
 	public bool alwaysReturnVisibleRange = false;
 	public int sequenceId;
 	public bool snapToGrid = true;
+	public bool continuous;
 	public string sceneName;
 	public bool rotateOnTeleport;
 	public bool forceVisible;
@@ -990,6 +939,7 @@ public class ServerAction
 	public float moveMagnitude;
 	public bool autoSimulation = true;
 	public float visibilityDistance;
+	public bool continuousMode; //i don't think this is used right now? also how is this different from the continuous bool above?
 	public bool uniquePickupableObjectTypes; // only allow one of each object type to be visible
 	public float removeProb;
 	public int numPlacementAttempts;
@@ -1000,9 +950,9 @@ public class ServerAction
 	public bool renderObjectImage;
 	public bool renderNormalsImage;
     public bool renderFlowImage;
-	public float cameraY = 0.675f;
+	public float cameraY;
 	public bool placeStationary = true; //when placing/spawning an object, do we spawn it stationary (kinematic true) or spawn and let physics resolve final position
-	//public string ssao = "default";
+	public string ssao = "default";
 	public string fillLiquid; //string to indicate what kind of liquid this object should be filled with. Water, Coffee, Wine etc.
 	public float TimeUntilRoomTemp;
 	public bool allowDecayTemperature = true; //set to true if temperature should decay over time, set to false if temp changes should not decay, defaulted true
@@ -1012,25 +962,6 @@ public class ServerAction
     public ObjectTypeCount[] minFreePerReceptacleType;
     public ObjectPose[] objectPoses;
     public ObjectToggle[] objectToggles;
-    public float noise;
-    public ControllerInitialization controllerInitialization = null;
-    public string agentType;
-    public float agentRadius = 2.0f;
-    public int maxStepCount;
-
-    public float rotateStepDegrees = 90.0f;
-
-    public bool useAgentTransform = false;
-
-    public bool topView = false;
-
-    public bool orthographic = false;
-
-    public bool grid = false;
-
-    public Color? gridColor;
-
-    public Gradient pathGradient;
 
     public SimObjType ReceptableSimObjType()
 	{
@@ -1050,14 +981,11 @@ public class ServerAction
 		}
 		return (SimObjType)Enum.Parse(typeof(SimObjType), objectType);
 	}
+
+
 }
 
-[Serializable]
-public class InitializeReturn
-{
-	public float cameraNearPlane;
-    public float cameraFarPlane;
-}
+
 
 public enum ServerActionErrorCode  {
 	Undefined,
@@ -1073,17 +1001,4 @@ public enum ServerActionErrorCode  {
 	LookUpCantExceedMax,
 	LookDownCantExceedMin,
 	InvalidAction
-}
-
-
-[Serializable]
-public class ControllerInitialization {
-    public Dictionary<string, TypedVariable> variableInitializations;
-}
-
-
-[Serializable]
-public class TypedVariable {
-    public string type;
-    public object value;
 }

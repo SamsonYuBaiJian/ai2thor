@@ -511,11 +511,8 @@ public class SimObjPhysics : MonoBehaviour, SimpleSimObj
 		if(col.transform.GetComponentInParent<SimObjPhysics>())
 		{
 			//add a check for if this is the handheld object, in which case dont't do this!
-
-            var fpsController = GameObject.FindObjectOfType<PhysicsRemoteFPSAgentController>();
-            //Debug.Log("FPS " + (fpsController == null));
-			
-			if(fpsController != null && !fpsController.WhatAmIHolding() == this.transform)
+			GameObject agent = GameObject.Find("FPSController");
+			if(!agent.transform.GetComponent<PhysicsRemoteFPSAgentController>().WhatAmIHolding() == this.transform)
 			{
 				//if this object is pickupable or moveable
 				if(PrimaryProperty == SimObjPrimaryProperty.CanPickup || PrimaryProperty == SimObjPrimaryProperty.Moveable)
@@ -742,12 +739,15 @@ public class SimObjPhysics : MonoBehaviour, SimpleSimObj
 			new PhysicsMaterialValues(MyColliders[i].material.dynamicFriction, MyColliders[i].material.staticFriction, MyColliders[i].material.bounciness);
 		}
 
-        myRigidbody = gameObject.GetComponent<Rigidbody>();
+		myRigidbody = gameObject.GetComponent<Rigidbody>();
 
-		Rigidbody rb = myRigidbody;
+		if (myRigidbody != null){
 
-		RBoriginalAngularDrag = rb.angularDrag;
-		RBoriginalDrag = rb.drag;
+			Rigidbody rb = myRigidbody;
+
+			RBoriginalAngularDrag = rb.angularDrag;
+			RBoriginalDrag = rb.drag;
+		}
 
 		TimerResetValue = HowManySecondsUntilRoomTemp;
 
@@ -793,7 +793,9 @@ public class SimObjPhysics : MonoBehaviour, SimpleSimObj
         //only update lastVelocity if physicsAutosimulation = true, otherwise let the Advance Physics function take care of it;
         if(sceneManager.physicsSimulationPaused == false)
         //record this object's current velocity
-        lastVelocity = Math.Abs(myRigidbody.angularVelocity.sqrMagnitude + myRigidbody.velocity.sqrMagnitude);
+		if (myRigidbody != null){
+        	lastVelocity = Math.Abs(myRigidbody.angularVelocity.sqrMagnitude + myRigidbody.velocity.sqrMagnitude);
+		}
     }
 	private void FixedUpdate()
 	{

@@ -26,9 +26,6 @@ import werkzeug
 import werkzeug.serving
 import werkzeug.http
 import numpy as np
-from enum import Enum
-
-from ai2thor.util.depth import apply_real_noise, generate_noise_indices
 
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
@@ -99,21 +96,14 @@ class MultiAgentEvent(object):
     def add_third_party_camera_image(self, third_party_image_data):
         self.third_party_camera_frames.append(read_buffer_image(third_party_image_data, self.screen_width, self.screen_height))
 
+def read_buffer_image(buf, width, height):
 
-def read_buffer_image(buf, width, height, flip_y=True, flip_x=False, dtype=np.uint8,
-                      flip_rb_colors=False):
-    im_bytes = np.frombuffer(buf.tobytes(), dtype=dtype) if sys.version_info.major < 3 \
-        else np.frombuffer(buf, dtype=dtype)
-    im = im_bytes.reshape(height, width, -1)
-    if flip_y:
-        im = np.flip(im, axis=0)
-    if flip_x:
-        im = np.flip(im, axis=1)
-    if flip_rb_colors:
-        im = im[..., ::-1]
-
-    return im
-
+    if sys.version_info.major < 3:
+        # support for Python 2.7 - can't handle memoryview in Python2.7 and Numpy frombuffer
+        return np.flip(np.frombuffer(
+            buf.tobytes(), dtype=np.uint8).reshape(height, width, -1), axis=0)
+    else:
+        return np.flip(np.frombuffer(buf, dtype=np.uint8).reshape(height, width, -1), axis=0)
 
 def unique_rows(arr, return_index=False, return_inverse=False):
     arr = np.ascontiguousarray(arr).copy()
@@ -183,7 +173,7 @@ class Event(object):
                 obj['visibleBounds2D'] = (obj['visible'] and obj['objectId'] in self.instance_detections2D)
 
     def process_colors(self):
-        if 'colors' in self.metadata and self.metadata['colors']:
+        if self.metadata['colors']:
             for color_data in self.metadata['colors']:
                 name = color_data['name']
                 c_key = tuple(color_data['color'])
@@ -232,47 +222,22 @@ class Event(object):
                 else:
                     self.class_masks[cls] = np.logical_or(self.class_masks[cls], unique_masks[color_ind, ...])
 
-    def _image_depth(self, image_depth_data, **kwargs):
+    def _image_depth(self, image_depth_data):
         image_depth = read_buffer_image(image_depth_data, self.screen_width, self.screen_height)
-        depth_format = kwargs['depth_format']
+        max_spots = image_depth[:,:,0] == 255
         image_depth_out = image_depth[:,:,0] + image_depth[:,:,1] / np.float32(256) + image_depth[:,:,2] / np.float32(256 ** 2)
-        multiplier = 1.0
-        if depth_format != DepthFormat.Normalized:
-            multiplier = kwargs['camera_far_plane'] - kwargs['camera_near_plane']
-        elif depth_format == DepthFormat.Millimeters:
-            multiplier *= 1000
-        image_depth_out *= multiplier / 256.0
+        image_depth_out[max_spots] = 256
+        image_depth_out *= 10.0 / 256.0 * 1000  # converts to meters then to mm
+        image_depth_out[image_depth_out > MAX_DEPTH] = MAX_DEPTH
 
-        depth_image_float = image_depth_out.astype(np.float32)
+        return image_depth_out.astype(np.float32)
 
-        if 'add_noise' in kwargs and kwargs['add_noise']:
-            depth_image_float = apply_real_noise(
-                depth_image_float,
-                self.screen_width,
-                indices=kwargs['noise_indices']
-            )
 
-        return depth_image_float
+    def add_image_depth(self, image_depth_data):
+        self.depth_frame = self._image_depth(image_depth_data)
 
-    def add_image_depth_robot(self, image_depth_data, depth_format, **kwargs):
-        multiplier = 1.0
-        camera_far_plane = kwargs.pop('camera_far_plane', 1)
-        camera_near_plane = kwargs.pop('camera_near_plane', 0)
-        if depth_format == DepthFormat.Normalized:
-            multiplier = 1.0 / (camera_far_plane - camera_near_plane)
-        elif depth_format == DepthFormat.Millimeters:
-            multiplier = 1000.0
-
-        image_depth = read_buffer_image(
-            image_depth_data, self.screen_width, self.screen_height, **kwargs
-        ).reshape(self.screen_height, self.screen_width) * multiplier
-        self.depth_frame = image_depth.astype(np.float32)
-
-    def add_image_depth(self, image_depth_data, **kwargs):
-        self.depth_frame = self._image_depth(image_depth_data, **kwargs)
-
-    def add_third_party_image_depth(self, image_depth_data, **kwargs):
-        self.third_party_depth_frames.append(self._image_depth(image_depth_data, **kwargs))
+    def add_third_party_image_depth(self, image_depth_data):
+        self.third_party_depth_frames.append(self._image_depth(image_depth_data))
 
     def add_third_party_image_normals(self, normals_data):
         self.third_party_normals_frames.append(read_buffer_image(normals_data, self.screen_width, self.screen_height))
@@ -289,8 +254,8 @@ class Event(object):
     def add_third_party_camera_image(self, third_party_image_data):
         self.third_party_camera_frames.append(read_buffer_image(third_party_image_data, self.screen_width, self.screen_height))
 
-    def add_image(self, image_data, **kwargs):
-        self.frame = read_buffer_image(image_data, self.screen_width, self.screen_height, **kwargs)
+    def add_image(self, image_data):
+        self.frame = read_buffer_image(image_data, self.screen_width, self.screen_height)
 
     def add_image_ids(self, image_ids_data):
         self.instance_segmentation_frame = read_buffer_image(image_ids_data, self.screen_width, self.screen_height)
@@ -354,19 +319,18 @@ class MultipartFormParser(object):
         self.form = {}
         self.files = {}
 
-        full_boundary = b'--' + boundary 
-        mid_boundary = b'\r\n' + full_boundary
+        full_boundary = b'\r\n--' + boundary
         view = memoryview(data)
-        i = data.find(full_boundary) + len(full_boundary)
+        i = data.find(full_boundary)
         while i >= 0:
-            next_offset = data.find(mid_boundary, i)
+            next_offset = data.find(full_boundary, i + len(full_boundary))
             if next_offset < 0:
                 break
-            headers_offset = i + 2 # add 2 for CRLF
+            headers_offset = i + len(full_boundary) + 2
             body_offset = data.find(b'\r\n\r\n', headers_offset)
             raw_headers = view[headers_offset: body_offset]
             body = view[body_offset + 4: next_offset]
-            i = next_offset + len(mid_boundary)
+            i = next_offset
 
             headers = {}
             for header in raw_headers.tobytes().decode('ascii').strip().split("\r\n"):
@@ -393,25 +357,9 @@ class MultipartFormParser(object):
                 self.form[cd_opts['name']].append(body)
 
 
-class DepthFormat(Enum):
-    Meters = 0,
-    Normalized = 1,
-    Millimeters = 2
-
 class Server(object):
 
-    def __init__(
-            self,
-            request_queue,
-            response_queue,
-            host,
-            port=0,
-            threaded=False,
-            depth_format=DepthFormat.Meters,
-            add_depth_noise=False,
-            width=300,
-            height=300
-    ):
+    def __init__(self, request_queue, response_queue, host, port=0, threaded=False):
 
         app = Flask(__name__,
                     template_folder=os.path.realpath(
@@ -433,16 +381,6 @@ class Server(object):
         # used to ensure that we are receiving frames for the action we sent
         self.sequence_id = 0
         self.last_event = None
-        self.camera_near_plane = 0.1
-        self.camera_far_plane = 20.0
-        self.depth_format = depth_format
-        self.add_depth_noise = add_depth_noise
-        self.noise_indices = None
-
-        if add_depth_noise:
-            assert width == height,\
-                "Noise supported with square dimension images only."
-            self.noise_indices = generate_noise_indices(width)
 
         @app.route('/ping', methods=['get'])
         def ping():
@@ -479,14 +417,7 @@ class Server(object):
                 e = Event(a)
                 image_mapping = dict(
                     image=e.add_image,
-                    image_depth=lambda x: e.add_image_depth(
-                        x,
-                        depth_format=self.depth_format,
-                        camera_near_plane=self.camera_near_plane,
-                        camera_far_plane=self.camera_far_plane,
-                        add_noise=self.add_depth_noise,
-                        noise_indices=self.noise_indices
-                    ),
+                    image_depth=e.add_image_depth,
                     image_ids=e.add_image_ids,
                     image_classes=e.add_image_classes,
                     image_normals=e.add_image_normals,
@@ -499,12 +430,7 @@ class Server(object):
 
                 third_party_image_mapping = dict(
                     image=e.add_image,
-                    image_thirdParty_depth=lambda x: e.add_third_party_image_depth(
-                        x,
-                        depth_format=self.depth_format,
-                        camera_near_plane=self.camera_near_plane,
-                        camera_far_plane=self.camera_far_plane
-                    ),
+                    image_thirdParty_depth=e.add_third_party_image_depth,
                     image_thirdParty_image_ids=e.add_third_party_image_ids,
                     image_thirdParty_classes=e.add_third_party_image_classes,
                     image_thirdParty_normals=e.add_third_party_image_normals,
@@ -516,6 +442,8 @@ class Server(object):
                         for key in third_party_image_mapping.keys():
                             if key in form.files:
                                 third_party_image_mapping[key](form.files[key][ti])
+
+
                 events.append(e)
 
             if len(events) > 1:
@@ -543,7 +471,3 @@ class Server(object):
 
     def start(self):
         self.wsgi_server.serve_forever()
-
-    def set_init_params(self, init_params):
-        self.camera_near_plane = init_params['cameraNearPlane']
-        self.camera_far_plane = init_params['cameraFarPlane']

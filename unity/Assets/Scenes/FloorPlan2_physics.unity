@@ -38,7 +38,7 @@ RenderSettings:
   m_ReflectionIntensity: 1
   m_CustomReflection: {fileID: 0}
   m_Sun: {fileID: 0}
-  m_IndirectSpecularColor: {r: 0.70008117, g: 0.7227283, b: 0.73079306, a: 1}
+  m_IndirectSpecularColor: {r: 0.7128276, g: 0.7352505, b: 0.74551654, a: 1}
   m_UseRadianceAmbientProbe: 0
 --- !u!157 &3
 LightmapSettings:
@@ -9796,11 +9796,6 @@ PrefabInstance:
       propertyPath: LightSources.Array.data[0]
       value: 
       objectReference: {fileID: 1799742486}
-    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
-        type: 3}
-      propertyPath: uniqueID
-      value: StoveKnob|+01.60|+00.92|+00.68
-      objectReference: {fileID: 0}
     - target: {fileID: 4138494269112618, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}
       propertyPath: m_LocalRotation.y
       value: 0
@@ -9849,6 +9844,11 @@ PrefabInstance:
         type: 3}
       propertyPath: StoveRange
       value: 
+      objectReference: {fileID: 0}
+    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
+        type: 3}
+      propertyPath: uniqueID
+      value: StoveKnob|+01.60|+00.92|+00.68
       objectReference: {fileID: 0}
     m_RemovedComponents:
     - {fileID: 95000013073990602, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}
@@ -12244,11 +12244,6 @@ PrefabInstance:
       propertyPath: LightSources.Array.data[0]
       value: 
       objectReference: {fileID: 8885339}
-    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
-        type: 3}
-      propertyPath: uniqueID
-      value: StoveKnob|+01.60|+00.92|+00.52
-      objectReference: {fileID: 0}
     - target: {fileID: 4138494269112618, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}
       propertyPath: m_LocalRotation.y
       value: 0
@@ -12297,6 +12292,11 @@ PrefabInstance:
         type: 3}
       propertyPath: StoveRange
       value: 
+      objectReference: {fileID: 0}
+    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
+        type: 3}
+      propertyPath: uniqueID
+      value: StoveKnob|+01.60|+00.92|+00.52
       objectReference: {fileID: 0}
     m_RemovedComponents:
     - {fileID: 95000013073990602, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}
@@ -13447,11 +13447,6 @@ PrefabInstance:
       propertyPath: LightSources.Array.data[0]
       value: 
       objectReference: {fileID: 1621433787}
-    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
-        type: 3}
-      propertyPath: uniqueID
-      value: StoveKnob|+01.60|+00.92|+00.46
-      objectReference: {fileID: 0}
     - target: {fileID: 4138494269112618, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}
       propertyPath: m_LocalRotation.y
       value: 0
@@ -13500,6 +13495,11 @@ PrefabInstance:
         type: 3}
       propertyPath: StoveRange
       value: 
+      objectReference: {fileID: 0}
+    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
+        type: 3}
+      propertyPath: uniqueID
+      value: StoveKnob|+01.60|+00.92|+00.46
       objectReference: {fileID: 0}
     m_RemovedComponents:
     - {fileID: 95000013073990602, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}
@@ -44072,16 +44072,16 @@ PrefabInstance:
       propertyPath: m_AnchorMax.y
       value: 0
       objectReference: {fileID: 0}
-    - target: {fileID: 114064980305203072, guid: 5b3a2f458d83e4af9a41ecf71b1f80f8,
-        type: 3}
-      propertyPath: Agent
-      value: 
-      objectReference: {fileID: 676930610}
     - target: {fileID: 114752788009735908, guid: 5b3a2f458d83e4af9a41ecf71b1f80f8,
         type: 3}
       propertyPath: m_FirstSelected
       value: 
       objectReference: {fileID: 0}
+    - target: {fileID: 114064980305203072, guid: 5b3a2f458d83e4af9a41ecf71b1f80f8,
+        type: 3}
+      propertyPath: Agent
+      value: 
+      objectReference: {fileID: 676930610}
     m_RemovedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 5b3a2f458d83e4af9a41ecf71b1f80f8, type: 3}
 --- !u!1 &1532136990
@@ -44872,11 +44872,6 @@ PrefabInstance:
       propertyPath: LightSources.Array.data[0]
       value: 
       objectReference: {fileID: 1890253444}
-    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
-        type: 3}
-      propertyPath: uniqueID
-      value: StoveKnob|+01.60|+00.92|+00.63
-      objectReference: {fileID: 0}
     - target: {fileID: 4138494269112618, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}
       propertyPath: m_LocalRotation.y
       value: 0
@@ -44925,6 +44920,11 @@ PrefabInstance:
         type: 3}
       propertyPath: StoveRange
       value: 
+      objectReference: {fileID: 0}
+    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
+        type: 3}
+      propertyPath: uniqueID
+      value: StoveKnob|+01.60|+00.92|+00.63
       objectReference: {fileID: 0}
     m_RemovedComponents:
     - {fileID: 95000013073990602, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}
@@ -52632,11 +52632,6 @@ PrefabInstance:
       propertyPath: LightSources.Array.data[0]
       value: 
       objectReference: {fileID: 1938318748}
-    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
-        type: 3}
-      propertyPath: uniqueID
-      value: StoveKnob|+01.60|+00.92|+00.57
-      objectReference: {fileID: 0}
     - target: {fileID: 4138494269112618, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}
       propertyPath: m_LocalRotation.y
       value: 0
@@ -52685,6 +52680,11 @@ PrefabInstance:
         type: 3}
       propertyPath: StoveRange
       value: 
+      objectReference: {fileID: 0}
+    - target: {fileID: 114247244180501690, guid: b18673dc5d4f14842a68d4dc9a891f3a,
+        type: 3}
+      propertyPath: uniqueID
+      value: StoveKnob|+01.60|+00.92|+00.57
       objectReference: {fileID: 0}
     m_RemovedComponents:
     - {fileID: 95000013073990602, guid: b18673dc5d4f14842a68d4dc9a891f3a, type: 3}

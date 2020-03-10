@@ -1,5 +1,4 @@
 import os
-import sys
 import datetime
 import zipfile
 import threading
@@ -9,11 +8,9 @@ import subprocess
 import pprint
 from invoke import task
 import boto3
-import platform
-
 
 S3_BUCKET = "ai2-thor"
-UNITY_VERSION = "2018.4.16f1"
+UNITY_VERSION = "2018.3.6f1"
 
 
 def add_files(zipf, start_dir):
@@ -46,22 +43,11 @@ def push_build(build_archive_name, archive_sha256):
 
 
 def _local_build_path(prefix="local"):
-    if platform.system() == "Darwin":
-        suffix = "OSXIntel64.app"
-        build_path = "unity/builds/thor-{}-{}/Contents/MacOS/thor-local-OSXIntel64".format(
-            prefix,
-            suffix
-        )
-    elif platform.system() == "Linux":
-        suffix = "Linux64"
-        build_path = "unity/builds/thor-{}-{}".format(prefix, suffix)
-    else:
-        raise RuntimeError("Unsupported platform '{}'. Only '{}' and '{}' supported".format(
-            platform.system(), "Linux", "Darwin")
-        )
     return os.path.join(
         os.getcwd(),
-        build_path
+        "unity/builds/thor-{}-OSXIntel64.app/Contents/MacOS/thor-local-OSXIntel64".format(
+            prefix
+        ),
     )
 
 
@@ -73,16 +59,12 @@ def _webgl_local_build_path(prefix, source_dir="builds"):
 
 def _build(unity_path, arch, build_dir, build_name, env={}):
     project_path = os.path.join(os.getcwd(), unity_path)
-    if sys.platform.startswith('darwin'):
-        unity_hub_path = "/Applications/Unity/Hub/Editor/{}/Unity.app/Contents/MacOS/Unity".format(
-            UNITY_VERSION
-        )
-        standalone_path = "/Applications/Unity-{}/Unity.app/Contents/MacOS/Unity".format(UNITY_VERSION)
-    elif 'win' in sys.platform:
-        unity_hub_path = "C:/PROGRA~1/Unity/Hub/Editor/{}/Editor/Unity.exe".format(UNITY_VERSION)
-        # TODO: Verify windows unity standalone path
-        standalone_path = "C:/PROGRA~1/{}/Editor/Unity.exe".format(UNITY_VERSION)
-
+    unity_hub_path = "/Applications/Unity/Hub/Editor/{}/Unity.app/Contents/MacOS/Unity".format(
+        UNITY_VERSION
+    )
+    standalone_path = "/Applications/Unity-{}/Unity.app/Contents/MacOS/Unity".format(
+        UNITY_VERSION
+    )
     if os.path.exists(standalone_path):
         unity_path = standalone_path
     else:
@@ -120,7 +102,7 @@ def class_dataset_images_for_scene(scene_name):
     # object must be at least 40% in view
     min_size = ((target_size * 0.4) / zoom_size) * player_size
 
-    env.start(width=player_size, height=player_size)
+    env.start(player_screen_width=player_size, player_screen_height=player_size)
     env.reset(scene_name)
     event = env.step(
         dict(
@@ -229,7 +211,7 @@ def class_dataset_images_for_scene(scene_name):
 
     env.stop()
     env = ai2thor.controller.Controller()
-    env.start(width=zoom_size, height=zoom_size)
+    env.start(player_screen_width=zoom_size, player_screen_height=zoom_size)
     env.reset(scene_name)
     event = env.step(dict(action="Initialize", gridSize=0.25))
 
@@ -339,14 +321,14 @@ def local_build(context, prefix="local", arch="OSXIntel64"):
 
 @task
 def webgl_build(
-        context,
-        scenes="",
-        room_ranges=None,
-        directory="builds",
-        prefix='local',
-        verbose=False,
-        content_addressable=False,
-        crowdsource_build=False
+    context,
+    scenes="",
+    room_ranges=None,
+    directory="builds",
+    prefix="local",
+    verbose=False,
+    content_addressable=False,
+    turk_build=False,
 ):
     """
     Creates a WebGL build
@@ -367,17 +349,14 @@ def webgl_build(
         file_name = path_split[1]
 
         print("File name {} ".format(file_name))
-        with open(file_path, 'rb') as f:
+        with open(file_path, "rb") as f:
             h = hashlib.md5()
             h.update(f.read())
             md5_id = h.hexdigest()
         new_file_name = "{}_{}".format(md5_id, file_name)
-        os.rename(
-            file_path,
-            os.path.join(directory, new_file_name)
-        )
+        os.rename(file_path, os.path.join(directory, new_file_name))
 
-        with open(json_metadata_file_path, 'r+') as f:
+        with open(json_metadata_file_path, "r+") as f:
             unity_json = json.load(f)
             print("UNITY json {}".format(unity_json))
             unity_json[json_key] = new_file_name
@@ -387,28 +366,31 @@ def webgl_build(
             f.seek(0)
             json.dump(unity_json, f, indent=4)
 
-    arch = 'WebGL'
+    arch = "WebGL"
     build_name = local_build_name(prefix, arch)
     if room_ranges is not None:
-        floor_plans = ["FloorPlan{}_physics".format(i) for i in
-            reduce(
+        floor_plans = [
+            "FloorPlan{}_physics".format(i)
+            for i in reduce(
                 lambda x, y: x + y,
                 map(
                     lambda x: x + [x[-1] + 1],
-                    [list(range(*tuple(int(y) for y in x.split("-"))))
-                        for x in room_ranges.split(",")]
-                )
+                    [
+                        list(range(*tuple(int(y) for y in x.split("-"))))
+                        for x in room_ranges.split(",")
+                    ],
+                ),
             )
-         ]
+        ]
 
         scenes = ",".join(floor_plans)
     if verbose:
         print(scenes)
 
     env = dict(SCENE=scenes)
-    if crowdsource_build:
-        env['DEFINES'] = 'CROWDSOURCE_TASK'
-    if _build('unity', arch, directory, build_name, env=env):
+    if turk_build:
+        env["DEFINES"] = "TURK_TASK"
+    if _build("unity", arch, directory, build_name, env=env):
         print("Build Successful")
     else:
         print("Build Failure")
@@ -416,26 +398,11 @@ def webgl_build(
     build_path = _webgl_local_build_path(prefix, directory)
 
     rooms = {
-        "kitchens": {
-            "name": "Kitchens",
-            "roomRanges": range(1, 31)
-        },
-        "livingRooms": {
-            "name": "Living Rooms",
-            "roomRanges": range(201, 231)
-        },
-        "bedrooms": {
-            "name": "Bedrooms",
-            "roomRanges": range(301, 331)
-        },
-        "bathrooms": {
-            "name": "Bathrooms",
-            "roomRanges": range(401, 431)
-        },
-        "foyers": {
-            "name": "Foyers",
-            "roomRanges": range(501, 531)
-        }
+        "kitchens": {"name": "Kitchens", "roomRanges": range(1, 31)},
+        "livingRooms": {"name": "Living Rooms", "roomRanges": range(201, 231)},
+        "bedrooms": {"name": "Bedrooms", "roomRanges": range(301, 331)},
+        "bathrooms": {"name": "Bathrooms", "roomRanges": range(401, 431)},
+        "foyers": {"name": "Foyers", "roomRanges": range(501, 531)},
     }
 
     room_type_by_id = {}
@@ -443,17 +410,14 @@ def webgl_build(
     for room_type, room_data in rooms.items():
         for room_num in room_data["roomRanges"]:
             room_id = "FloorPlan{}_physics".format(room_num)
-            room_type_by_id[room_id] = {
-                "type": room_type,
-                "name": room_data["name"]
-            }
+            room_type_by_id[room_id] = {"type": room_type, "name": room_data["name"]}
 
     for scene_name in scenes.split(","):
         room_type = room_type_by_id[scene_name]
         if room_type["type"] not in scene_metadata:
             scene_metadata[room_type["type"]] = {
                 "scenes": [],
-                "name": room_type["name"]
+                "name": room_type["name"],
             }
 
         scene_metadata[room_type["type"]]["scenes"].append(scene_name)
@@ -462,18 +426,18 @@ def webgl_build(
         print(scene_metadata)
 
     to_content_addressable = [
-        ('{}.data.unityweb'.format(build_name), 'dataUrl'),
-        ('{}.wasm.code.unityweb'.format(build_name), 'wasmCodeUrl'),
-        ('{}.wasm.framework.unityweb'.format(build_name), 'wasmFrameworkUrl')
+        ("{}.data.unityweb".format(build_name), "dataUrl"),
+        ("{}.wasm.code.unityweb".format(build_name), "wasmCodeUrl"),
+        ("{}.wasm.framework.unityweb".format(build_name), "wasmFrameworkUrl"),
     ]
     for file_name, key in to_content_addressable:
         file_to_content_addressable(
             os.path.join(build_path, "Build/{}".format(file_name)),
             os.path.join(build_path, "Build/{}.json".format(build_name)),
-            key
+            key,
         )
 
-    with open(os.path.join(build_path, "scenes.json"), 'w') as f:
+    with open(os.path.join(build_path, "scenes.json"), "w") as f:
         f.write(json.dumps(scene_metadata, sort_keys=False, indent=4))
 
 
@@ -645,15 +609,13 @@ def pending_travis_build():
 @task
 def ci_build(context):
     import fcntl
-    import io
 
     lock_f = open(os.path.join(os.environ["HOME"], ".ci-build.lock"), "w")
 
     try:
         fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         build = pending_travis_build()
-        blacklist_branches = ["vids"]
-        if build and build["branch"] not in blacklist_branches:
+        if build:
             clean()
             link_build_cache(build["branch"])
             subprocess.check_call("git fetch", shell=True)
@@ -678,7 +640,7 @@ def ci_build(context):
 
         fcntl.flock(lock_f, fcntl.LOCK_UN)
 
-    except io.BlockingIOError as e:
+    except BlockingIOError as e:
         pass
 
     lock_f.close()
@@ -774,8 +736,8 @@ def build(context, local=False):
 
     builds = {"Docker": {"tag": version}}
     threads = []
-    # dp = Process(target=build_docker, args=(version,))
-    # dp.start()
+    dp = Process(target=build_docker, args=(version,))
+    dp.start()
 
     for arch in platform_map.keys():
         unity_path = "unity"
@@ -795,10 +757,10 @@ def build(context, local=False):
         t.start()
         threads.append(t)
 
-    # dp.join()
+    dp.join()
 
-    # if dp.exitcode != 0:
-    #    raise Exception("Exception with docker build")
+    if dp.exitcode != 0:
+        raise Exception("Exception with docker build")
 
     for t in threads:
         t.join()
@@ -822,51 +784,23 @@ def interact(
     scene,
     editor_mode=False,
     local_build=False,
-    image=False,
     depth_image=False,
     class_image=False,
     object_image=False,
-    metadata=False,
-    robot=False,
-    port=8200,
-    host='127.0.0.1',
-    image_directory='.',
-    width=300,
-    height=300,
-    noise=False
 ):
     import ai2thor.controller
-    import ai2thor.robot_controller
 
-    if image_directory != '.':
-        if os.path.exists(image_directory):
-            shutil.rmtree(image_directory)
-        os.makedirs(image_directory)
-
-    if not robot:
-        env = ai2thor.controller.Controller(
-            host=host,
-            port=port,
-            width=width,
-            height=height,
-            local_executable_path=_local_build_path() if local_build else None,
-            image_dir=image_directory,
-            start_unity=False if editor_mode else True,
-            save_image_per_frame=True,
-            add_depth_noise=noise
-        )
+    env = ai2thor.controller.Controller()
+    if local_build:
+        print("Executing from local build at {} ".format( _local_build_path()))
+        env.local_executable_path = _local_build_path()
+    if editor_mode:
+        env.start(8200, False, player_screen_width=600, player_screen_height=600)
     else:
-        env = ai2thor.robot_controller.Controller(
-            host=host,
-            port=port,
-            width=width,
-            height=height,
-            image_dir=image_directory,
-            save_image_per_frame=True
-        )
+        env.start(player_screen_width=600, player_screen_height=600)
 
     env.reset(scene)
-    initialize_event = env.step(
+    env.step(
         dict(
             action="Initialize",
             gridSize=0.25,
@@ -875,345 +809,9 @@ def interact(
             renderDepthImage=depth_image
         )
     )
-
-    from ai2thor.interact import InteractiveControllerPrompt
-    InteractiveControllerPrompt.write_image(
-        initialize_event,
-        image_directory,
-        '_init',
-        image_per_frame=True,
-        class_segmentation_frame=class_image,
-        instance_segmentation_frame=object_image,
-        color_frame=image,
-        depth_frame=depth_image,
-        metadata=metadata
-    )
-
-    env.interact(
-        class_segmentation_frame=class_image,
-        instance_segmentation_frame=object_image,
-        depth_frame=depth_image,
-        color_frame=image,
-        metadata=metadata
-    )
+    env.interact()
     env.stop()
 
-@task
-def get_depth(
-        ctx,
-        scene=None,
-        image=False,
-        depth_image=False,
-        class_image=False,
-        object_image=False,
-        metadata=False,
-        port=8200,
-        host='127.0.0.1',
-        image_directory='.',
-        number=1,
-        local_build=False,
-        teleport=None,
-        rotation=0
-    ):
-    import ai2thor.controller
-    import ai2thor.robot_controller
-
-    if image_directory != '.':
-        if os.path.exists(image_directory):
-            shutil.rmtree(image_directory)
-        os.makedirs(image_directory)
-
-    if scene is None:
-
-        env = ai2thor.robot_controller.Controller(
-            host=host,
-            port=port,
-            width=600,
-            height=600,
-            image_dir=image_directory,
-            save_image_per_frame=True
-
-        )
-    else:
-        env = ai2thor.controller.Controller(
-            width=600,
-            height=600,
-            local_executable_path=_local_build_path() if local_build else None
-        )
-
-    if scene is not None:
-        env.reset(scene)
-
-    initialize_event = env.step(
-        dict(
-            action="Initialize",
-            gridSize=0.25,
-            renderObjectImage=object_image,
-            renderClassImage=class_image,
-            renderDepthImage=depth_image,
-            agentMode="Bot",
-            fieldOfView=59,
-            continuous=True,
-            snapToGrid=False
-        )
-    )
-
-    from ai2thor.interact import InteractiveControllerPrompt
-    if scene is not None:
-        teleport_arg = dict(
-            action="TeleportFull",
-            y=0.9010001,
-            rotation=dict(x=0, y=rotation, z=0)
-        )
-        if teleport is not None:
-            teleport = [float(pos) for pos in teleport.split(',')]
-
-            t_size = len(teleport)
-            if 1 <= t_size:
-                teleport_arg['x'] = teleport[0]
-            if 2 <= t_size:
-                teleport_arg['z'] = teleport[1]
-            if 3 <= t_size:
-                teleport_arg['y'] = teleport[2]
-
-        evt = env.step(
-            teleport_arg
-        )
-
-        InteractiveControllerPrompt.write_image(
-            evt,
-            image_directory,
-            '_{}'.format('teleport'),
-            image_per_frame=True,
-            class_segmentation_frame=class_image,
-            instance_segmentation_frame=object_image,
-            color_frame=image,
-            depth_frame=depth_image,
-            metadata=metadata
-        )
-
-    InteractiveControllerPrompt.write_image(
-        initialize_event,
-        image_directory,
-        '_init',
-        image_per_frame=True,
-        class_segmentation_frame=class_image,
-        instance_segmentation_frame=object_image,
-        color_frame=image,
-        depth_frame=depth_image,
-        metadata=metadata
-    )
-
-    for i in range(number):
-        event = env.step(action='MoveAhead', moveMagnitude=0.0)
-
-        InteractiveControllerPrompt.write_image(
-            event,
-            image_directory,
-            '_{}'.format(i),
-            image_per_frame=True,
-            class_segmentation_frame=class_image,
-            instance_segmentation_frame=object_image,
-            color_frame=image,
-            depth_frame=depth_image,
-            metadata=metadata
-        )
-    env.stop()
-
-@task
-def inspect_depth(ctx, directory, all=False, indices=None, jet=False, under_score=False):
-    import numpy as np
-    import cv2
-    import glob
-    import re
-
-    under_prefix = "_" if under_score else ""
-    regex_str = "depth{}(.*)\.png".format(under_prefix)
-
-    def sort_key_function(name):
-        split_name = name.split("/")
-        x = re.search(regex_str, split_name[len(split_name) - 1]).group(1)
-        try:
-            val = int(x)
-            return val
-        except ValueError:
-            return -1
-
-    if indices is None or all:
-        images = sorted(
-            glob.glob("{}/depth{}*.png".format(directory, under_prefix)),
-            key=sort_key_function
-        )
-        print(images)
-    else:
-        images = ["depth{}{}.png".format(under_prefix, i) for i in indices.split(",")]
-
-    for depth_filename in images:
-        # depth_filename = os.path.join(directory, "depth_{}.png".format(index))
-
-        split_fn = depth_filename.split("/")
-        index = re.search(regex_str, split_fn[len(split_fn) - 1]).group(1)
-        print("index {}".format(index))
-        print("Inspecting: '{}'".format(depth_filename))
-        depth_raw_filename = os.path.join(directory, "depth_raw{}{}.npy".format("_" if under_score else "", index))
-        raw_depth = np.load(depth_raw_filename)
-
-        if jet:
-            mn = np.min(raw_depth)
-            mx = np.max(raw_depth)
-            print("min depth value: {}, max depth: {}".format(mn, mx))
-            norm = (((raw_depth - mn).astype(np.float32) / (mx - mn)) * 255.0).astype(np.uint8)
-
-            img = cv2.applyColorMap(norm, cv2.COLORMAP_JET)
-        else:
-            grayscale = (255.0 / raw_depth.max() * (raw_depth - raw_depth.min())).astype(np.uint8)
-            print("max {} min {}".format(raw_depth.max(), raw_depth.min()))
-            img = grayscale
-
-        print(raw_depth.shape)
-
-        def inspect_pixel(event, x, y, flags, param):
-            if event == cv2.EVENT_LBUTTONDOWN:
-                print("Pixel at x: {}, y: {} ".format(y, x))
-                print(raw_depth[y][x])
-
-        cv2.namedWindow("image")
-        cv2.setMouseCallback("image", inspect_pixel)
-
-        cv2.imshow('image', img)
-        cv2.waitKey(0)
-
-
-@task
-def real_2_sim(ctx, source_dir, index, scene, output_dir, rotation=0, local_build=False, jet=False):
-    import json
-    import numpy as np
-    import cv2
-    from ai2thor.util.transforms import transform_real_2_sim
-    depth_real_fn = os.path.join(source_dir, "depth_raw_{}.npy".format(index))
-    depth_metadata_fn = depth_real = os.path.join(source_dir, "metadata_{}.json".format(index))
-    color_real_fn = os.path.join(source_dir, "color_{}.png".format(index))
-    color_sim_fn = os.path.join(output_dir, "color_teleport.png".format(index))
-    with open(depth_metadata_fn, 'r') as f:
-        metadata = json.load(f)
-
-        pos = metadata['agent']['position']
-
-        sim_pos = transform_real_2_sim(pos)
-
-        teleport_arg = "{},{},{}".format(sim_pos['x'], sim_pos['z'], sim_pos['y'])
-
-        print(sim_pos)
-        print(teleport_arg)
-
-        inspect_depth(
-            ctx,
-            source_dir,
-            indices=index,
-            under_score=True,
-            jet=jet
-        )
-
-        get_depth(
-            ctx,
-            scene=scene,
-            image=True,
-            depth_image=True,
-            class_image=False,
-            object_image=False,
-            metadata=True,
-            image_directory=output_dir,
-            number=1,
-            local_build=local_build,
-            teleport=teleport_arg,
-            rotation=rotation
-        )
-
-        im = cv2.imread(color_real_fn)
-        cv2.imshow("color_real.png", im)
-
-        im2 = cv2.imread(color_sim_fn)
-        cv2.imshow("color_sim.png", im2)
-
-        inspect_depth(
-            ctx,
-            output_dir,
-            indices="teleport",
-            under_score=True,
-            jet=jet
-        )
-
-@task
-def noise_depth(ctx, directory, show=False):
-    import glob
-    import cv2
-    import numpy as np
-
-    def imshow_components(labels):
-        # Map component labels to hue val
-        label_hue = np.uint8(179 * labels / np.max(labels))
-        blank_ch = 255 * np.ones_like(label_hue)
-        labeled_img = cv2.merge([label_hue, blank_ch, blank_ch])
-
-        # cvt to BGR for display
-        labeled_img = cv2.cvtColor(labeled_img, cv2.COLOR_HSV2BGR)
-
-        # set bg label to black
-        labeled_img[label_hue == 0] = 0
-
-        if show:
-            cv2.imshow('labeled.png', labeled_img)
-            cv2.waitKey()
-
-    images = glob.glob("{}/depth_*.png".format(directory))
-
-    indices = []
-    for image_file in images:
-        print(image_file)
-
-        grayscale_img = cv2.imread(image_file, 0)
-        img = grayscale_img
-
-        img_size = img.shape
-
-        img = cv2.threshold(img, 30, 255, cv2.THRESH_BINARY_INV)[1]
-
-        ret, labels = cv2.connectedComponents(img)
-        print("Components: {}".format(ret))
-        imshow_components(labels)
-        print(img_size[0])
-
-        indices_top_left = np.where(labels == labels[0][0])
-        indices_top_right = np.where(labels == labels[0][img_size[1]-1])
-        indices_bottom_left = np.where(labels == labels[img_size[0]-1][0])
-        indices_bottom_right = np.where(labels == labels[img_size[0]-1][img_size[1] - 1])
-
-        indices = [
-             indices_top_left,
-             indices_top_right,
-             indices_bottom_left,
-             indices_bottom_right
-        ]
-
-        blank_image = np.zeros((300, 300, 1), np.uint8)
-
-        blank_image.fill(255)
-        blank_image[indices_top_left] = 0
-        blank_image[indices_top_right] = 0
-        blank_image[indices_bottom_left] = 0
-        blank_image[indices_bottom_right] = 0
-
-        if show:
-            cv2.imshow('labeled.png', blank_image)
-            cv2.waitKey()
-        break
-
-    compressed = []
-    for indices_arr in indices:
-        unique_e, counts = np.unique(indices_arr[0], return_counts=True)
-        compressed.append(counts)
-
-    np.save("depth_noise", compressed)
 
 @task
 def release(ctx):
@@ -1369,11 +967,11 @@ def benchmark(
         env.start(
             8200,
             False,
-            width=screen_width,
-            height=screen_height,
+            player_screen_width=screen_width,
+            player_screen_height=screen_height,
         )
     else:
-        env.start(width=screen_width, height=screen_height)
+        env.start(player_screen_width=screen_width, player_screen_height=screen_height)
     # Kitchens:       FloorPlan1 - FloorPlan30
     # Living rooms:   FloorPlan201 - FloorPlan230
     # Bedrooms:       FloorPlan301 - FloorPlan330
@@ -1456,62 +1054,46 @@ def s3_etag_data(data):
 
 
 cache_seconds = 31536000
+
+
 @task
-def webgl_deploy(ctx, bucket='ai2-thor-webgl', prefix='local', source_dir='builds', target_dir='', verbose=False, force=False, extensions_no_cache=''):
-    from pathlib import Path
+def webgl_deploy(
+    ctx, prefix="local", source_dir="builds", target_dir="", verbose=False, force=False
+):
+
     from os.path import isfile, join, isdir
 
     content_types = {
-        '.js': 'application/javascript; charset=utf-8',
-        '.html': 'text/html; charset=utf-8',
-        '.ico': 'image/x-icon',
-        '.svg': 'image/svg+xml; charset=utf-8',
-        '.css': 'text/css; charset=utf-8',
-        '.png': 'image/png',
-        '.txt': 'text/plain',
-        '.jpg': 'image/jpeg',
-        '.unityweb': 'application/octet-stream',
-        '.json': 'application/json'
+        ".js": "application/javascript; charset=utf-8",
+        ".html": "text/html; charset=utf-8",
+        ".ico": "image/x-icon",
+        ".svg": "image/svg+xml; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".png": "image/png",
+        ".txt": "text/plain",
+        ".jpg": "image/jpeg",
+        ".unityweb": "application/octet-stream",
+        ".json": "application/json",
     }
 
-    content_encoding = {
-        '.unityweb': 'gzip'
-    }
+    content_encoding = {".unityweb": "gzip"}
 
-    bucket_name = bucket
-    s3 = boto3.resource('s3')
+    bucket_name = "ai2-thor-webgl"
+    s3 = boto3.resource("s3")
 
     current_objects = list_objects_with_metadata(bucket_name)
 
-    no_cache_extensions = {
-        ".txt",
-        ".html",
-        ".json",
-        ".js"
-    }
-
-    no_cache_extensions.union(set(extensions_no_cache.split(',')))
+    no_cache_extensions = {".txt", ".html", ".json", ".js"}
 
     if verbose:
-        session = boto3.Session()
-        credentials = session.get_credentials()
+        print("Deploying to: {}/{}".format(bucket_name, target_dir))
 
-        # Credentials are refreshable, so accessing your access key / secret key
-        # separately can lead to a race condition. Use this to get an actual matched
-        # set.
-        credentials = credentials.get_frozen_credentials()
-        access_key = credentials.access_key
-        secret_key = credentials.secret_key
-        # print("key:  {} pass: {}".format(access_key, secret_key))
-        # print("Deploying to: {}/{}".format(bucket_name, target_dir))
-
-    def walk_recursive(path, func, parent_dir=''):
+    def walk_recursive(path, func, parent_dir=""):
         for file_name in os.listdir(path):
             f_path = join(path, file_name)
             relative_path = join(parent_dir, file_name)
             if isfile(f_path):
-                key = Path(join(target_dir, relative_path))
-                func(f_path, key.as_posix())
+                func(f_path, join(target_dir, relative_path))
             elif isdir(f_path):
                 walk_recursive(f_path, func, relative_path)
 
@@ -1520,25 +1102,34 @@ def webgl_deploy(ctx, bucket='ai2-thor-webgl', prefix='local', source_dir='build
         if verbose:
             print("'{}'".format(key))
 
-        with open(f_path, 'rb') as f:
+        with open(f_path, "rb") as f:
             file_data = f.read()
             etag = s3_etag_data(file_data)
             kwargs = {}
             if ext in content_encoding:
-                kwargs['ContentEncoding'] = content_encoding[ext]
+                kwargs["ContentEncoding"] = content_encoding[ext]
 
-            if not force and key in current_objects and etag == current_objects[key]['ETag']:
+            if (
+                not force
+                and key in current_objects
+                and etag == current_objects[key]["ETag"]
+            ):
                 if verbose:
                     print("ETag match - skipping %s" % key)
                 return
 
             if ext in content_types:
-                cache = 'no-cache, no-store, must-revalidate' if ext in no_cache_extensions else 'public, max-age={}'.format(
-                    cache_seconds
+                cache = (
+                    "no-cache, no-store, must-revalidate"
+                    if ext in no_cache_extensions
+                    else "public, max-age={}".format(cache_seconds)
                 )
                 now = datetime.datetime.utcnow()
-                expires = now if ext == '.html' or ext == '.txt' else now + datetime.timedelta(
-                    seconds=cache_seconds)
+                expires = (
+                    now
+                    if ext == ".html" or ext == ".txt"
+                    else now + datetime.timedelta(seconds=cache_seconds)
+                )
                 s3.Object(bucket_name, key).put(
                     Body=file_data,
                     ACL="public-read",
@@ -1549,16 +1140,13 @@ def webgl_deploy(ctx, bucket='ai2-thor-webgl', prefix='local', source_dir='build
                 )
             else:
                 if verbose:
-                    print("Warning: Content type for extension '{}' not defined,"
-                          " uploading with no content type".format(ext))
-                s3.Object(bucket_name, key).put(
-                    Body=f.read(),
-                    ACL="public-read")
+                    print(
+                        "Warning: Content type for extension '{}' not defined,"
+                        " uploading with no content type".format(ext)
+                    )
+                s3.Object(bucket_name, key).put(Body=f.read(), ACL="public-read")
 
-    if prefix is not None:
-        build_path = _webgl_local_build_path(prefix, source_dir)
-    else:
-        build_path = source_dir
+    build_path = _webgl_local_build_path(prefix, source_dir)
     if verbose:
         print("Build path: '{}'".format(build_path))
         print("Uploading...")
@@ -1646,963 +1234,3 @@ def webgl_deploy_all(ctx, verbose=False, individual_rooms=False):
         else:
             webgl_build(ctx, room_ranges=range_str, directory=build_dir)
             webgl_deploy(ctx, source_dir=build_dir, target_dir=key, verbose=verbose)
-
-
-
-@task
-def webgl_s3_deploy(ctx, bucket, target_dir, scenes='', verbose=False, all=False, deploy_skip=False):
-    """
-    Builds and deploys a WebGL unity site
-    :param context:
-    :param target_dir: Target s3 bucket
-    :param target_dir: Target directory in bucket
-    :param scenes: String of scene numbers to include in the build as a comma separated list e.g. "4,6,230"
-    :param verbose: verbose build
-    :param all: overrides 'scenes' parameter and builds and deploys all separate rooms
-    :param deploy_skip: Whether to skip deployment and do build only.
-    :return:
-    """
-    rooms = {
-        "kitchens": (1, 30),
-        "livingRooms": (201, 230),
-        "bedrooms": (301, 330),
-        "bathrooms": (401, 430)
-    }
-
-    if all:
-        flatten = lambda l: [item for sublist in l for item in sublist]
-        room_numbers = flatten([[i for i in range(room_range[0], room_range[1])] for key, room_range in rooms.items()])
-    else:
-        room_numbers = [s.strip() for s in scenes.split(",")]
-
-    if verbose:
-        print("Rooms in build: '{}'".format(room_numbers))
-
-    for i in room_numbers:
-        floor_plan_name = "FloorPlan{}_physics".format(i)
-        if verbose:
-            print("Building room '{}'...".format(floor_plan_name))
-        target_s3_dir = "{}/{}".format(target_dir, floor_plan_name)
-        build_dir = "builds/{}".format(target_s3_dir)
-
-        webgl_build(ctx, scenes=floor_plan_name, directory=build_dir, crowdsource_build=True)
-        if verbose:
-            print("Deploying room '{}'...".format(floor_plan_name))
-        if not deploy_skip:
-            webgl_deploy(ctx, bucket=bucket,  source_dir=build_dir, target_dir=target_s3_dir, verbose=verbose, extensions_no_cache='.css')
-
-
-@task
-def webgl_site_deploy(context, template_name, output_dir, bucket, unity_build_dir='', s3_target_dir='', force=False, verbose=False):
-    from pathlib import Path
-    from os.path import isfile, join, isdir
-    template_dir = Path("unity/Assets/WebGLTemplates/{}".format(template_name))
-
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    # os.mkdir(output_dir)
-
-    ignore_func = lambda d, files: [f for f in files if isfile(join(d, f)) and f.endswith('.meta')]
-
-    if unity_build_dir != '':
-        shutil.copytree(unity_build_dir, output_dir, ignore=ignore_func)
-        # shutil.copytree(os.path.join(unity_build_dir, "Build"), os.path.join(output_dir, "Build"), ignore=ignore_func)
-    else:
-        shutil.copytree(template_dir, output_dir, ignore=ignore_func)
-
-    webgl_deploy(context, bucket=bucket, prefix=None, source_dir=output_dir,  target_dir=s3_target_dir, verbose=verbose, force=force, extensions_no_cache='.css')
-@task
-def mock_client_request(context):
-    import time
-    import msgpack
-    import numpy as np
-    import requests
-    import cv2
-    from pprint import pprint
-
-    r = requests.post('http://127.0.0.1:9200/step', json=dict(action='MoveAhead', sequenceId=1))
-    s = time.time()
-    payload = msgpack.unpackb(r.content, raw=False)
-    metadata = payload['metadata']['agents'][0]
-    image = np.frombuffer(payload['frames'][0], dtype=np.uint8).reshape(metadata['screenHeight'], metadata['screenWidth'], 3)
-    pprint(metadata)
-    cv2.imshow('aoeu', image)
-    cv2.waitKey(1000)
-
-@task
-def start_mock_real_server(context):
-    import ai2thor.mock_real_server
-
-    m = ai2thor.mock_real_server.MockServer(height=300, width=300)
-    print("Started mock server on port: http://" + m.host + ":" + str(m.port))
-    m.start()
-
-
-@task
-def create_robothor_dataset(
-        context,
-        local_build=False,
-        editor_mode=False,
-        width=300,
-        height=300,
-        output='robothor-dataset.json',
-        intermediate_directory='.',
-        visibility_distance=1.0,
-        objects_filter=None,
-        scene_filter=None,
-        filter_file=None
-    ):
-    """
-    Creates a dataset for the robothor challenge in `intermediate_directory`
-    named `robothor-dataset.json`
-    """
-    import ai2thor.controller
-    import ai2thor.util.metrics as metrics
-    import json
-    from pprint import pprint
-
-    scene = 'FloorPlan_Train1_1'
-    angle = 45
-    gridSize = 0.25
-    # Restrict points visibility_multiplier_filter * visibility_distance away from the target object
-    visibility_multiplier_filter = 2
-
-    scene_object_filter = {}
-    if filter_file is not None:
-        with open(filter_file, 'r') as f:
-            scene_object_filter = json.load(f)
-            print("Filter:")
-            pprint(scene_object_filter)
-
-    print("Visibility distance: {}".format(visibility_distance))
-    controller = ai2thor.controller.Controller(
-        width=width,
-        height=height,
-        local_executable_path=_local_build_path() if local_build else None,
-        start_unity=False if editor_mode else True,
-        scene=scene,
-        port=8200,
-        host='127.0.0.1',
-        # Unity params
-        gridSize=gridSize,
-        fieldOfView=60,
-        rotateStepDegrees=angle,
-        agentMode='bot',
-        visibilityDistance=visibility_distance,
-    )
-
-    targets = [
-        "Apple",
-        "Baseball Bat",
-        "BasketBall",
-        "Bowl",
-        "Garbage Can",
-        "House Plant",
-        "Laptop",
-        "Mug",
-        "Remote",
-        "Spray Bottle",
-        "Vase",
-        "Alarm Clock",
-        "Television",
-        "Pillow"
-
-    ]
-    failed_points = []
-
-    if objects_filter is not None:
-        obj_filter = set([o for o in objects_filter.split(",")])
-        targets = [o for o in targets if o.replace(" ", "") in obj_filter]
-
-    desired_points = 30
-    event = controller.step(
-        dict(
-            action='GetScenesInBuild',
-        )
-    )
-    scenes_in_build = event.metadata['actionReturn']
-
-    objects_types_in_scene = set()
-
-    def sqr_dist(a, b):
-        x = a[0] - b[0]
-        z = a[2] - b[2]
-        return x * x + z * z
-
-    def sqr_dist_dict(a, b):
-        x = a['x'] - b['x']
-        z = a['z'] - b['z']
-        return x * x + z * z
-
-    def get_points(contoller, object_type, scene):
-        print("Getting points in scene: '{}'...: ".format(scene))
-        controller.reset(scene)
-        event = controller.step(
-            dict(
-                action='ObjectTypeToObjectIds',
-                objectType=object_type.replace(" ", "")
-            )
-        )
-        object_ids = event.metadata['actionReturn']
-
-
-
-
-        if object_ids is None or len(object_ids) > 1 or len(object_ids) == 0:
-            print("Object type '{}' not available in scene.".format(object_type))
-            return None
-
-        objects_types_in_scene.add(object_type)
-        object_id = object_ids[0]
-
-        event_reachable = controller.step(
-            dict(
-                action='GetReachablePositions',
-                gridSize=0.25
-            )
-        )
-
-
-        target_position = controller.step(action='GetObjectPosition', objectId=object_id).metadata['actionReturn']
-
-        reachable_positions = event_reachable.metadata['actionReturn']
-
-        reachable_pos_set = set([
-            (pos['x'], pos['y'], pos['z']) for pos in reachable_positions
-            # if sqr_dist_dict(pos, target_position) >= visibility_distance * visibility_multiplier_filter
-        ])
-
-
-
-        def filter_points(selected_points, point_set, minimum_distance):
-            result = set()
-            for selected in selected_points:
-                if selected in point_set:
-                    result.add(selected)
-                    remove_set = set(
-                        [p for p in point_set if sqr_dist(p, selected) <= minimum_distance * minimum_distance]
-                    )
-                    point_set = point_set.difference(remove_set)
-            return result
-
-        import random
-        points = random.sample(reachable_pos_set, desired_points * 4)
-
-        final_point_set = filter_points(points, reachable_pos_set, gridSize * 2)
-
-        print("Total number of points: {}".format(len(final_point_set)))
-
-        print("Id {}".format(event.metadata['actionReturn']))
-
-        point_objects = []
-
-        eps = 0.0001
-        counter = 0
-        for (x, y, z) in final_point_set:
-            possible_orientations = [0, 90, 180, 270]
-            pos_unity = dict(x=x, y=y, z=z)
-            try:
-                path = metrics.get_shortest_path_to_object(
-                    controller,
-                    object_id,
-                    pos_unity,
-                    {'x': 0, 'y': 0, 'z': 0}
-                )
-                minimum_path_length = metrics.path_distance(path)
-
-                rotation_allowed = False
-                while not rotation_allowed:
-                    if len(possible_orientations) == 0:
-                        break
-                    roatation_y = random.choice(possible_orientations)
-                    possible_orientations.remove(roatation_y)
-                    evt = controller.step(
-                        action="TeleportFull",
-                        x=pos_unity['x'],
-                        y=pos_unity['y'],
-                        z=pos_unity['z'],
-                        rotation=dict(x=0, y=roatation_y, z=0)
-                    )
-                    rotation_allowed = evt.metadata['lastActionSuccess']
-                    if not evt.metadata['lastActionSuccess']:
-                        print(evt.metadata['errorMessage'])
-                        print("--------- Rotation not allowed! for pos {} rot {} ".format(pos_unity, roatation_y))
-
-                if minimum_path_length > eps and rotation_allowed:
-                    m = re.search('FloorPlan_([a-zA-Z\-]*)([0-9]+)_([0-9]+)', scene)
-                    point_id = "{}_{}_{}_{}_{}".format(
-                        m.group(1),
-                        m.group(2),
-                        m.group(3),
-                        object_type,
-                        counter
-                    )
-                    point_objects.append({
-                        'id': point_id,
-                        'scene': scene,
-                        'object_type': object_type,
-                        'object_id': object_id,
-                        'target_position': target_position,
-                        'initial_position': pos_unity,
-                        'initial_orientation': roatation_y,
-                        'shortest_path': path,
-                        'shortest_path_length': minimum_path_length
-                    })
-                    counter += 1
-
-            except ValueError:
-                print("-----Invalid path discarding point...")
-                failed_points.append({
-                    'scene': scene,
-                    'object_type': object_type,
-                    'object_id': object_id,
-                    'target_position': target_position,
-                    'initial_position': pos_unity
-                })
-
-
-        sorted_objs = sorted(point_objects,
-                             key=lambda m: sqr_dist_dict(m['initial_position'], m['target_position']))
-        third = int(len(sorted_objs) / 3.0)
-
-        for i, obj in enumerate(sorted_objs):
-            if i < third:
-                level = 'easy'
-            elif i < 2 * third:
-                level = 'medium'
-            else:
-                level = 'hard'
-
-            sorted_objs[i]['difficulty'] = level
-
-        return sorted_objs
-
-    dataset = {}
-    dataset_flat = []
-
-    if intermediate_directory is not None:
-        if intermediate_directory != '.':
-            if os.path.exists(intermediate_directory):
-                shutil.rmtree(intermediate_directory)
-            os.makedirs(intermediate_directory)
-    import re
-
-    def key_sort_func(scene_name):
-        m = re.search('FloorPlan_([a-zA-Z\-]*)([0-9]+)_([0-9]+)', scene_name)
-        return m.group(1), int(m.group(2)), int(m.group(3))
-
-    scenes = sorted(
-        [scene for scene in scenes_in_build if 'physics' not in scene],
-                    key=key_sort_func
-                    )
-
-    if scene_filter is not None:
-        scene_filter_set = set([o for o in scene_filter.split(",")])
-        scenes = [s for s in scenes if s in scene_filter_set]
-
-    print("Sorted scenes: {}".format(scenes))
-    for scene in scenes:
-        dataset[scene] = {}
-        dataset['object_types'] = targets
-        objects = []
-        for objectType in targets:
-
-            if filter_file is None or (objectType in scene_object_filter and scene in scene_object_filter[objectType]):
-                dataset[scene][objectType] = []
-                obj = get_points(controller, objectType, scene)
-                if obj is not None:
-
-                    objects = objects + obj
-
-        dataset_flat = dataset_flat + objects
-        if intermediate_directory != '.':
-            with open(os.path.join(intermediate_directory, '{}.json'.format(scene)), 'w') as f:
-                json.dump(objects, f, indent=4)
-
-
-    with open(os.path.join(intermediate_directory, output), 'w') as f:
-        json.dump(dataset_flat, f, indent=4)
-    print("Object types in scene union: {}".format(objects_types_in_scene))
-    print("Total unique objects: {}".format(len(objects_types_in_scene)))
-    print("Total scenes: {}".format(len(scenes)))
-    print("Total datapoints: {}".format(len(dataset_flat)))
-
-    print(failed_points)
-    with open(os.path.join(intermediate_directory, 'failed.json'), 'w') as f:
-        json.dump(failed_points, f, indent=4)
-
-
-@task
-def shortest_path_to_object(
-        context,
-        scene,
-        object,
-        x,
-        z,
-        y=0.9103442,
-        rotation=0,
-        editor_mode=False,
-        local_build=False,
-        visibility_distance=1.0,
-        grid_size=0.25
-):
-    p = dict(x=x, y=y, z=z)
-
-    import ai2thor.controller
-    import ai2thor.util.metrics as metrics
-
-    scene = scene
-    angle = 45
-    gridSize = grid_size
-    controller = ai2thor.controller.Controller(
-        width=300,
-        height=300,
-        local_executable_path=_local_build_path() if local_build else None,
-        start_unity=False if editor_mode else True,
-        scene=scene,
-        port=8200,
-        host='127.0.0.1',
-        # Unity params
-        gridSize=gridSize,
-        fieldOfView=60,
-        rotateStepDegrees=angle,
-        agentMode='bot',
-        visibilityDistance=visibility_distance,
-    )
-    path = metrics.get_shortest_path_to_object_type(
-        controller,
-        object,
-        p,
-        {'x': 0, 'y': 0, 'z': 0}
-    )
-    minimum_path_length = metrics.path_distance(path)
-
-    print("Path: {}".format(path))
-    print("Path lenght: {}".format(minimum_path_length))
-
-@task
-def filter_dataset(ctx, filename, output_filename, ids=False):
-    """
-    Filters objects in dataset that are not reachable in at least one of the scenes (have
-    zero occurrences in the dataset)
-    """
-    import json
-    from pprint import pprint
-    with open(filename, 'r') as f:
-        obj = json.load(f)
-
-    targets = [
-        "Apple",
-        "Baseball Bat",
-        "BasketBall",
-        "Bowl",
-        "Garbage Can",
-        "House Plant",
-        "Laptop",
-        "Mug",
-        "Spray Bottle",
-        "Vase",
-        "Alarm Clock",
-        "Television",
-        "Pillow"
-    ]
-
-    counter = {}
-    for f in obj:
-        obj_type = f['object_type']
-
-        if f['scene'] not in counter:
-            counter[f['scene']] = {target: 0 for target in targets}
-        scene_counter = counter[f['scene']]
-        if obj_type not in scene_counter:
-            scene_counter[obj_type] = 1
-        else:
-            scene_counter[obj_type] += 1
-
-    objects_with_zero = set()
-    objects_with_zero_by_obj = {}
-    for k, item in counter.items():
-        # print("Key {} ".format(k))
-        for obj_type, count in item.items():
-            # print("obj {} count {}".format(obj_type, count))
-            if count == 0:
-                if obj_type not in objects_with_zero_by_obj:
-                    objects_with_zero_by_obj[obj_type] = set()
-
-                # print("With zero for obj: {} in scene {}".format(obj_type, k))
-                objects_with_zero_by_obj[obj_type].add(k)
-                objects_with_zero.add(obj_type)
-
-    print("Objects with zero: {}".format(objects_with_zero))
-    with open('with_zero.json', 'w') as fw:
-        dict_list = {k: list(v) for k, v in objects_with_zero_by_obj.items()}
-        json.dump(dict_list, fw, sort_keys=True, indent=4)
-    pprint(objects_with_zero_by_obj)
-    filtered = [o for o in obj if o['object_type'] not in objects_with_zero]
-    counter = 0
-    current_scene = ""
-    current_object_type = ""
-    import re
-    for i, o in enumerate(filtered):
-        if current_scene != o['scene'] or current_object_type != o['object_type']:
-            counter = 0
-            current_scene = o['scene']
-            current_object_type = o['object_type']
-
-        m = re.search('FloorPlan_([a-zA-Z\-]*)([0-9]+)_([0-9]+)', o['scene'])
-        point_id = "{}_{}_{}_{}_{}".format(
-            m.group(1),
-            m.group(2),
-            m.group(3),
-            o['object_type'],
-            counter
-        )
-        counter += 1
-
-        o['id'] = point_id
-    with open(output_filename, 'w') as f:
-        json.dump(filtered, f, indent=4)
-
-
-@task
-def fix_dataset_object_types(ctx, input_file, output_file, editor_mode=False, local_build=False):
-    import json
-    import ai2thor.controller
-
-    with open(input_file, 'r') as f:
-        obj = json.load(f)
-        scene = 'FloorPlan_Train1_1'
-        angle = 45
-        gridSize = 0.25
-        controller = ai2thor.controller.Controller(
-            width=300,
-            height=300,
-            local_executable_path=_local_build_path() if local_build else None,
-            start_unity=False if editor_mode else True,
-            scene=scene,
-            port=8200,
-            host='127.0.0.1',
-            # Unity params
-            gridSize=gridSize,
-            fieldOfView=60,
-            rotateStepDegrees=angle,
-            agentMode='bot',
-            visibilityDistance=1,
-        )
-        current_scene = None
-        object_map = {}
-        for i, point in enumerate(obj):
-            if current_scene != point['scene']:
-                print("Fixing for scene '{}'...".format(point['scene']))
-                controller.reset(point['scene'])
-                current_scene = point['scene']
-                object_map = {o['objectType'].lower(): {'id': o['objectId'], 'type': o['objectType']} for o in controller.last_event.metadata['objects']}
-            key = point['object_type'].replace(" ", "").lower()
-            point['object_id'] = object_map[key]['id']
-            point['object_type'] = object_map[key]['type']
-
-        with open(output_file, 'w') as fw:
-            json.dump(obj, fw, indent=True)
-
-
-@task
-def test_dataset(ctx, filename, scenes=None, objects=None, editor_mode=False, local_build=False):
-    import json
-    import ai2thor.controller
-    import ai2thor.util.metrics as metrics
-    scene = "FloorPlan_Train1_1" if scenes is None else scenes.split(",")[0]
-    controller = ai2thor.controller.Controller(
-        width=300,
-        height=300,
-        local_executable_path=_local_build_path() if local_build else None,
-        start_unity=False if editor_mode else True,
-        scene=scene,
-        port=8200,
-        host='127.0.0.1',
-        # Unity params
-        gridSize=0.25,
-        fieldOfView=60,
-        rotateStepDegrees=45,
-        agentMode='bot',
-        visibilityDistance=1,
-    )
-    with open(filename, 'r') as f:
-        dataset = json.load(f)
-        filtered_dataset = dataset
-        if scenes is not None:
-            scene_set = set(scenes.split(","))
-            print("Filtering {}".format(scene_set))
-            filtered_dataset = [d for d in dataset if d['scene'] in scene_set]
-        if objects is not None:
-            object_set = set(objects.split(","))
-            print("Filtering {}".format(object_set))
-            filtered_dataset = [d for d in filtered_dataset if d['object_type'] in object_set]
-        current_scene = None
-        current_object = None
-        point_counter = 0
-        print(len(filtered_dataset))
-        for point in filtered_dataset:
-            if current_scene != point['scene']:
-                current_scene = point['scene']
-                print("Testing for scene '{}'...".format(current_scene))
-            if current_object != point['object_type']:
-                current_object = point['object_type']
-                point_counter = 0
-                print("    Object '{}'...".format(current_object))
-            try:
-                path = metrics.get_shortest_path_to_object_type(
-                    controller,
-                    point['object_type'],
-                    point['initial_position'],
-                    {'x': 0, 'y': point['initial_orientation'], 'z': 0}
-                )
-                path_dist = metrics.path_distance(path)
-                point_counter += 1
-
-                print("        Total points: {}".format(point_counter))
-
-                print(path_dist)
-            except ValueError:
-                print("Cannot find path from point")
-
-
-@task
-def visualize_shortest_paths(
-        ctx,
-        dataset_path,
-        width=600,
-        height=300,
-        editor_mode=False,
-        local_build=False,
-        scenes=None,
-        object_types=None,
-        gridSize=0.25,
-        output_dir='.'
-):
-    angle = 45
-    import ai2thor.controller
-    import json
-    from PIL import Image
-    controller = ai2thor.controller.Controller(
-        width=width,
-        height=height,
-        local_executable_path=_local_build_path() if local_build else None,
-        start_unity=False if editor_mode else True,
-        port=8200,
-        host='127.0.0.1',
-        # Unity params
-        gridSize=gridSize,
-        fieldOfView=60,
-        rotateStepDegrees=angle,
-        agentMode='bot',
-        visibilityDistance=1,
-    )
-    if output_dir != '.' and os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    if output_dir != '.':
-        os.mkdir(output_dir)
-    evt = controller.step(
-        action='AddThirdPartyCamera',
-        rotation=dict(x=90, y=0, z=0),
-        position=dict(x=5.40, y=3.25, z=-3.0),
-        fieldOfView=2.25,
-        orthographic=True
-    )
-
-    evt = controller.step(action='SetTopLevelView', topView=True)
-    evt = controller.step(action='ToggleMapView')
-
-    im = Image.fromarray(evt.third_party_camera_frames[0])
-    im.save(os.path.join(output_dir, "top_view.jpg"))
-
-    with open(dataset_path, 'r') as f:
-        dataset = json.load(f)
-        print("Running for {} points...".format(len(dataset)))
-        dataset_filtered = dataset
-        if scenes is not None:
-            scene_f_set = set(scenes.split(","))
-            dataset_filtered = [d for d in dataset if d['scene'] in scene_f_set]
-        if object_types is not None:
-            object_f_set = set(object_types.split(","))
-            dataset_filtered = [d for d in dataset_filtered if d['object_type'] in object_f_set]
-
-
-        index = 0
-        datapoint = dataset_filtered[index]
-        current_scene = datapoint['scene']
-        current_object = datapoint['object_type']
-        failed ={}
-        while index < len(dataset_filtered):
-            previous_index = index
-            controller.reset(current_scene)
-            while current_scene == datapoint['scene'] and current_object == datapoint['object_type']:
-                index += 1
-                if index > len(dataset_filtered) - 1:
-                    break
-                datapoint = dataset_filtered[index]
-
-            current_scene = datapoint['scene']
-            current_object = datapoint['object_type']
-
-            key = "{}_{}".format(current_scene, current_object)
-
-            failed[key] = []
-
-            print("Points for '{}' in scene '{}'...".format(current_object, current_scene))
-            evt = controller.step(
-                action='AddThirdPartyCamera',
-                rotation=dict(x=90, y=0, z=0),
-                position=dict(x=5.40, y=3.25, z=-3.0),
-                fieldOfView=2.25,
-                orthographic=True
-            )
-
-            sc = dataset_filtered[previous_index]['scene']
-            obj_type = dataset_filtered[previous_index]['object_type']
-            positions = [d['initial_position'] for d in dataset_filtered[previous_index:index]]
-            # print("{} : {} : {}".format(sc, obj_type, positions))
-            evt = controller.step(
-                action="VisualizeShortestPaths",
-                objectType=obj_type,
-                positions=positions,
-                grid=True
-            )
-            im = Image.fromarray(evt.third_party_camera_frames[0])
-            im.save(os.path.join(output_dir, "{}-{}.jpg".format(sc, obj_type)))
-
-            failed[key] = [positions[i] for i, success in enumerate(evt.metadata['actionReturn']) if not success]
-
-        from pprint import pprint
-        pprint(failed)
-
-@task
-def fill_in_dataset(
-        ctx,
-        dataset_dir,
-        dataset_filename,
-        filter_filename,
-        intermediate_dir,
-        output_filename='filled.json',
-        local_build=False,
-        editor_mode=False,
-        visibility_distance=1.0
-):
-    import json
-    import re
-    import glob
-    import ai2thor.controller
-    dataset_path = os.path.join(dataset_dir, dataset_filename)
-    output_dataset_path = os.path.join(dataset_dir, output_filename)
-    filled_dataset_path = os.path.join(intermediate_dir, output_filename)
-    def key_sort_func(scene_name):
-        m = re.search('FloorPlan_([a-zA-Z\-]*)([0-9]+)_([0-9]+)', scene_name)
-        return m.group(1), int(m.group(2)), int(m.group(3))
-
-    targets = [
-        "Apple",
-        "Baseball Bat",
-        "Basketball",
-        "Bowl",
-        "Garbage Can",
-        "House Plant",
-        "Laptop",
-        "Mug",
-        "Remote",
-        "Spray Bottle",
-        "Vase",
-        "Alarm Clock",
-        "Television",
-        "Pillow"
-    ]
-
-    controller = ai2thor.controller.Controller(
-        width=300,
-        height=300,
-        local_executable_path=_local_build_path() if local_build else None,
-        start_unity=False if editor_mode else True,
-        port=8200,
-        host='127.0.0.1',
-        # Unity params
-        gridSize=0.25,
-        fieldOfView=60,
-        rotateStepDegrees=45,
-        agentMode='bot',
-        visibilityDistance=1,
-    )
-
-    scenes = sorted(
-        [scene for scene in controller._scenes_in_build if 'physics' not in scene],
-        key=key_sort_func
-    )
-
-    missing_datapoints_by_scene = {}
-    partial_dataset_by_scene = {}
-    for scene in scenes:
-        missing_datapoints_by_scene[scene] = []
-        partial_dataset_by_scene[scene] = []
-
-    with open(dataset_path, 'r') as f:
-        dataset = json.load(f)
-        fill_in_dataset = create_dataset(
-            ctx,
-            local_build=local_build,
-            editor_mode=editor_mode,
-            output=output_filename,
-            intermediate_directory=intermediate_dir,
-            visibility_distance=visibility_distance
-        )
-
-        for datapoint in filter_dataset:
-            missing_datapoints_by_scene[datapoint['scene']].append(datapoint)
-
-        partial_dataset_filenames = sorted(glob.glob("{}/FloorPlan_*.png".format(dataset_dir)))
-        print("Datas")
-
-        difficulty_order_map = {
-            'easy': 0,
-            'medium': 1,
-            'hard': 2
-        }
-
-        for d_filename in partial_dataset_filenames:
-            with open(d_filename, 'r') as fp:
-                partial_dataset = json.load(fp)
-                partial_dataset[0]['scene'] = partial_dataset
-
-        final_dataset = []
-        for scene in scenes:
-            for object_type in targets:
-                arr = [p for p in partial_dataset[scene] if p['object_type'] == object_type] + \
-                      [p for p in missing_datapoints_by_scene[scene] if p['object_type'] == object_type]
-                final_dataset = final_dataset + sorted(
-                    arr,
-                    key=lambda p: (p['object_type'], difficulty_order_map[p['difficulty']])
-                )
-
-@task
-def test_teleport(ctx, editor_mode=False, local_build=False):
-    import ai2thor.controller
-    import  time
-    controller = ai2thor.controller.Controller(
-        rotateStepDegrees=30,
-        visibilityDistance=1.0,
-        gridSize=0.25,
-        port=8200,
-        host='127.0.0.1',
-        local_executable_path=_local_build_path() if local_build else None,
-        start_unity=False if editor_mode else True,
-        agentType="stochastic",
-        continuousMode=True,
-        continuous=False,
-        snapToGrid=False,
-        agentMode="bot",
-        scene="FloorPlan_Train1_2",
-        width=640,
-        height=480,
-        continus=True
-    )
-
-    controller.step(
-        action="GetReachablePositions",
-        gridSize=0.25
-    )
-    params = {'x': 8.0, 'y': 0.924999952, 'z': -1.75, 'rotation': {'x': 0.0, 'y': 240.0, 'z': 0.0}, 'horizon': 330.0}
-    evt = controller.step(
-        action="TeleportFull",
-        **params
-    )
-
-    print("New pos: {}".format(evt.metadata["agent"]["position"]))
-
-
-@task
-def resort_dataset(ctx, dataset_path, output_path, editor_mode=False, local_build = True):
-    import json
-    import re
-    with open(dataset_path, 'r') as f:
-        dataset = json.load(f)
-
-    index = 0
-    previous_index = 0
-    datapoint = dataset[index]
-    current_scene = datapoint['scene']
-    current_object = datapoint['object_type']
-    # controller.reset(current_scene)
-    sum_t = 0
-    new_dataset = []
-    while index < len(dataset):
-        previous_index = index
-        while current_scene == datapoint['scene'] and current_object == datapoint['object_type']:
-            index += 1
-            if index > len(dataset) - 1:
-                break
-            datapoint = dataset[index]
-
-        current_scene = datapoint['scene']
-        current_object = datapoint['object_type']
-
-        print("Scene '{}'...".format(current_scene))
-        sorted_datapoints = sorted(
-            dataset[previous_index:index],
-            key=lambda dp: dp['shortest_path_length']
-        )
-        third = int(len(sorted_datapoints) / 3.0)
-        for i, obj in enumerate(sorted_datapoints):
-            if i < third:
-                level = 'easy'
-            elif i < 2 * third:
-                level = 'medium'
-            else:
-                level = 'hard'
-            sorted_datapoints[i]['difficulty'] = level
-            m = re.search('FloorPlan_([a-zA-Z\-]*)([0-9]+)_([0-9]+)', obj['scene'])
-            point_id = "{}_{}_{}_{}_{}".format(
-                m.group(1),
-                m.group(2),
-                m.group(3),
-                obj['object_type'],
-                i
-            )
-            sorted_datapoints[i]['id'] = point_id
-            sorted_datapoints[i]['difficulty'] = level
-        new_dataset = new_dataset + sorted_datapoints
-        sum_t += len(sorted_datapoints)
-
-    print("original len: {}, new len: {}".format(len(dataset), sum_t))
-
-    with open(output_path, 'w') as fw:
-        json.dump(new_dataset, fw, indent=4)
-
-
-@task
-def remove_dataset_spaces(ctx, dataset_dir):
-    import json
-    train = os.path.join(dataset_dir, 'train.json')
-    test = os.path.join(dataset_dir, 'val.json')
-
-    with open(train, 'r') as f:
-        train_data = json.load(f)
-
-    with open(test, 'r') as f:
-        test_data = json.load(f)
-
-    id_set = set()
-    for o in train_data:
-        o['id'] = o['id'].replace(" ", '')
-        id_set.add(o['id'])
-
-    print(sorted(id_set))
-
-    id_set = set()
-
-    for o in test_data:
-        o['id'] = o['id'].replace(" ", '')
-        id_set.add(o['id'])
-
-    print(sorted(id_set))
-
-    with open('train.json', 'w') as fw:
-        json.dump(train_data, fw, indent=4, sort_keys=True)
-
-    with open('val.json', 'w') as fw:
-        json.dump(test_data, fw, indent=4, sort_keys=True)

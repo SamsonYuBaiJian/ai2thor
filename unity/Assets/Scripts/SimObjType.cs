@@ -137,7 +137,7 @@ public enum SimObjType : int
 	EggShell = 30,
 	EggCracked = 31,
 	StoveKnob = 32,
-	Container = 33, //for physics version - see Bottle
+	Container = 33, //for physics version - see GlassBottle
 	Cup = 34,
 	ButterKnife = 35,
 	PotatoSliced = 36,
@@ -198,7 +198,7 @@ public enum SimObjType : int
     BasketBall = 90,
     Faucet = 91,
     Boots = 92,
-    Bottle = 93,
+    Glassbottle = 93,
     DishSponge = 94,
     Drawer = 95,
     FloorLamp= 96,
@@ -254,6 +254,17 @@ public enum SimObjType : int
 	ShowerHead = 146,
     TVStand = 147,
     CoffeeTable = 148,
+	Display = 149,
+	LaptopScreenSide = 150,
+	LaptopBaseSide = 151,
+	DisplayScreen = 152,
+	DisplayBase = 153,
+	ChairHead = 154,
+	ChairBack = 155,
+	ChairArm = 156,
+	ChairBase = 157,
+	ChairSeat = 158,
+	ChairFootrest = 159,
 }
 
 public static class ReceptacleRestrictions
@@ -311,8 +322,8 @@ public static class ReceptacleRestrictions
 	{
 		SimObjType.Pot, SimObjType.Pan, SimObjType.Bowl, SimObjType.Plate, SimObjType.Bread, SimObjType.Cup, SimObjType.Mug, SimObjType.Laptop,
 		SimObjType.SaltShaker, SimObjType.PepperShaker, SimObjType.AlarmClock, SimObjType.Box, SimObjType.SoapBottle, SimObjType.SoapBottleFilled, SimObjType.Kettle,
-		SimObjType.Bottle, SimObjType.CreditCard, SimObjType.RemoteControl, SimObjType.Candle, SimObjType.SprayBottle, SimObjType.Statue, SimObjType.Vase, 
-		SimObjType.KeyChain, SimObjType.CD, SimObjType.Book, SimObjType.EggCracked
+		SimObjType.Glassbottle, SimObjType.CreditCard, SimObjType.RemoteControl, SimObjType.Candle, SimObjType.SprayBottle, SimObjType.Statue, SimObjType.Vase, 
+		SimObjType.KeyChain, SimObjType.CD, SimObjType.Book, SimObjType.EggCracked, SimObjType.Display
 	};
 
 	//Each sim object type keeps track of what sort of Receptacles it can be placed in
@@ -353,7 +364,7 @@ public static class ReceptacleRestrictions
 		}},
 
 		//BOTTLE (Glassbottle)
-		{SimObjType.Bottle, new List<SimObjType>()
+		{SimObjType.Glassbottle, new List<SimObjType>()
 		{SimObjType.Fridge, SimObjType.Box, SimObjType.Dresser, SimObjType.Desk, SimObjType.Sink, SimObjType.SinkBasin, SimObjType.Cabinet, SimObjType.DiningTable, SimObjType.TVStand, SimObjType.CoffeeTable, SimObjType.SideTable,
 		 SimObjType.CounterTop, SimObjType.Shelf, SimObjType.GarbageCan,
 		}},
@@ -460,6 +471,10 @@ public static class ReceptacleRestrictions
 
 		//LAPTOP
 		{SimObjType.Laptop, new List<SimObjType>()
+		{SimObjType.Sofa, SimObjType.ArmChair, SimObjType.Ottoman, SimObjType.Dresser, SimObjType.Desk, SimObjType.Bed, SimObjType.DiningTable, SimObjType.TVStand, SimObjType.CoffeeTable, SimObjType.SideTable, SimObjType.CounterTop}},
+
+		//DISPLAY
+		{SimObjType.Display, new List<SimObjType>()
 		{SimObjType.Sofa, SimObjType.ArmChair, SimObjType.Ottoman, SimObjType.Dresser, SimObjType.Desk, SimObjType.Bed, SimObjType.DiningTable, SimObjType.TVStand, SimObjType.CoffeeTable, SimObjType.SideTable, SimObjType.CounterTop}},
 
 		//LETTUCE

@@ -21,7 +21,6 @@ import shlex
 import signal
 import subprocess
 import shutil
-import re
 import threading
 import os
 import platform
@@ -29,7 +28,6 @@ import uuid
 import tty
 import sys
 import termios
-import fcntl
 try:
     from queue import Queue
 except ImportError:
@@ -42,12 +40,9 @@ import numpy as np
 import ai2thor.docker
 import ai2thor.downloader
 import ai2thor.server
-from ai2thor.interact import InteractiveControllerPrompt, DefaultActions
-from ai2thor.server import queue_get, DepthFormat
-from ai2thor.build import BUILDS
+from ai2thor.server import queue_get
+from ai2thor._builds import BUILDS
 from ai2thor._quality_settings import QUALITY_SETTINGS, DEFAULT_QUALITY
-
-import warnings
 
 logger = logging.getLogger(__name__)
 
@@ -369,131 +364,29 @@ def key_for_point(x, z):
 
 class Controller(object):
 
-    def __init__(
-            self,
-            quality=DEFAULT_QUALITY,
-            fullscreen=False,
-            headless=False,
-            port=0,
-            start_unity=True,
-            local_executable_path=None,
-            width=300,
-            height=300,
-            x_display=None,
-            host='127.0.0.1',
-            scene='FloorPlan_Train1_1',
-            image_dir='.',
-            save_image_per_frame=False,
-            docker_enabled=False,
-            depth_format=DepthFormat.Meters,
-            add_depth_noise=False,
-            download_only=False,
-            **unity_initialization_parameters
-    ):
+    def __init__(self, quality=DEFAULT_QUALITY, fullscreen=False, headless=False):
         self.request_queue = Queue(maxsize=1)
         self.response_queue = Queue(maxsize=1)
         self.receptacle_nearest_pivot_points = {}
         self.server = None
         self.unity_pid = None
-        self.docker_enabled = docker_enabled
+        self.docker_enabled = False
         self.container_id = None
-        self.local_executable_path = local_executable_path
+        self.local_executable_path = None
         self.last_event = None
-        self._scenes_in_build = None
         self.server_thread = None
         self.killing_unity = False
         self.quality = quality
         self.lock_file = None
         self.fullscreen = fullscreen
         self.headless = headless
-        self.depth_format = depth_format
-        self.add_depth_noise = add_depth_noise
 
-        self.interactive_controller = InteractiveControllerPrompt(
-            list(DefaultActions),
-            has_object_actions=True,
-            image_dir=image_dir,
-            image_per_frame=save_image_per_frame
-        )
+    def reset(self, scene_name=None):
+        if not scene_name.endswith('_physics'):
+            scene_name = scene_name + "_physics"
 
-        if download_only:
-            self.download_binary()
-        else:
-            self.start(
-                port=port,
-                start_unity=start_unity,
-                width=width,
-                height=height,
-                x_display=x_display,
-                host=host
-            )
-
-            self.initialization_parameters = unity_initialization_parameters
-
-            if 'continuous' in self.initialization_parameters:
-                warnings.warn(
-                    "Warning: 'continuous' is deprecated and will be ignored,"
-                    " use 'snapToGrid={}' instead."
-                    .format(not self.initialization_parameters['continuous']),
-                    DeprecationWarning
-                )
-
-            if 'continuousMode' in self.initialization_parameters:
-                warnings.warn(
-                    "Warning: 'continuousMode' is deprecated and will be ignored,"
-                    " use 'snapToGrid={}' instead."
-                        .format(not self.initialization_parameters['continuousMode']),
-                    DeprecationWarning
-                )
-
-            event = self.reset(scene)
-            if event.metadata['lastActionSuccess']:
-                init_return = event.metadata['actionReturn']
-                self.server.set_init_params(init_return)
-
-                print("Initialize return: {}".format(init_return))
-            else:
-                raise RuntimeError('Initialize action failure: {}'.format(
-                    event.metadata['errorMessage'])
-                )
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        self.stop()
-
-    @property
-    def scenes_in_build(self):
-        if self._scenes_in_build:
-            return self._scenes_in_build
-
-        event = self.step(action='GetScenesInBuild')
-
-        self._scenes_in_build = set(event.metadata['actionReturn'])
-
-        return self._scenes_in_build
-
-    def reset(self, scene='FloorPlan_Train1_1'):
-        if re.match(r'^FloorPlan[0-9]+$', scene):
-            scene = scene + "_physics"
-
-        if scene not in self.scenes_in_build:
-            def key_sort_func(scene_name):
-                m = re.search('FloorPlan[_]?([a-zA-Z\-]*)([0-9]+)_?([0-9]+)?.*$', scene_name)
-                last_val = m.group(3) if m.group(3) is not None else -1
-                return m.group(1), int(m.group(2)), int(last_val)
-            raise ValueError(
-                "\nScene '{}' not contained in build (scene names are case sensitive)."
-                "\nPlease choose one of the following scene names:\n\n{}".format(
-                    scene,
-                    ", ".join(sorted(list(self.scenes_in_build), key=key_sort_func))
-                )
-            )
-
-        self.response_queue.put_nowait(dict(action='Reset', sceneName=scene, sequenceId=0))
-        self.last_event = queue_get(self.request_queue)  # can this be deleted?
-        self.last_event = self.step(action='Initialize', **self.initialization_parameters)
+        self.response_queue.put_nowait(dict(action='Reset', sceneName=scene_name, sequenceId=0))
+        self.last_event = queue_get(self.request_queue)
 
         return self.last_event
 
@@ -505,6 +398,7 @@ class Controller(object):
             exclude_receptacle_object_pairs=[],
             max_num_repeats=1,
             remove_prob=0.5):
+
 
         if random_seed is None:
             random_seed = random.randint(0, 2**32)
@@ -536,25 +430,6 @@ class Controller(object):
             for i in range(low, high):
                 scenes.append('FloorPlan%s_physics' % i)
 
-        return scenes
-
-    def robothor_scenes(self, types={'val', 'train'}):
-        assert 'train' in types or 'test' in types or 'val' in types
-        # scene types -> [wall configurations, layouts per configuration]
-        scene_types = {'train': [15, 5],
-                       'val': [2, 2],
-                       'test': [5, 2]}
-        scenes = []
-        for scene_type in types:
-            name = scene_type
-            name = name.title()
-            if name == 'Val':
-                name = 'RVal'
-            if name == 'Test':
-                name = 'RTest'
-            for wall_config in range(1, scene_types[scene_type][0] + 1):
-                for layouts in range(1, scene_types[scene_type][1] + 1):
-                    scenes.append('FloorPlan_{}{}_{}'.format(name, wall_config, layouts))
         return scenes
 
     def unlock_release(self):
@@ -607,18 +482,119 @@ class Controller(object):
     def interact(self,
                  class_segmentation_frame=False,
                  instance_segmentation_frame=False,
-                 depth_frame=False,
-                 color_frame=False,
-                 metadata=False
+                 depth_frame=False
                  ):
-        self.interactive_controller.interact(
-            self,
-            class_segmentation_frame,
-            instance_segmentation_frame,
-            depth_frame,
-            color_frame,
-            metadata
-        )
+
+        from PIL import Image
+        if not sys.stdout.isatty():
+            raise RuntimeError("controller.interact() must be run from a terminal")
+
+        default_interact_commands = {
+            '\x1b[C': dict(action='MoveRight', moveMagnitude=0.25),
+            '\x1b[D': dict(action='MoveLeft', moveMagnitude=0.25),
+            '\x1b[A': dict(action='MoveAhead', moveMagnitude=0.25),
+            '\x1b[B': dict(action='MoveBack', moveMagnitude=0.25),
+            '\x1b[1;2A': dict(action='LookUp'),
+            '\x1b[1;2B': dict(action='LookDown'),
+            'i': dict(action='LookUp'),
+            'k': dict(action='LookDown'),
+            'l': dict(action='RotateRight'),
+            'j': dict(action='RotateLeft'),
+            '\x1b[1;2C': dict(action='RotateRight'),
+            '\x1b[1;2D': dict(action='RotateLeft')
+        }
+
+        self._interact_commands = default_interact_commands.copy()
+
+        command_message = u"Enter a Command: Move \u2190\u2191\u2192\u2193, Rotate/Look Shift + \u2190\u2191\u2192\u2193, Quit 'q' or Ctrl-C"
+        print(command_message)
+        for a in self.next_interact_command():
+            new_commands = {}
+            command_counter = dict(counter=1)
+
+            def add_command(cc, action, **args):
+                if cc['counter'] < 15:
+                    com = dict(action=action)
+                    com.update(args)
+                    new_commands[str(cc['counter'])] = com
+                    cc['counter'] += 1
+
+            event = self.step(a)
+            # check inventory
+            visible_objects = []
+            frame_writes = [
+                ('instance_segmentation.jpeg',
+                 instance_segmentation_frame,
+                 lambda event: event.instance_segmentation_frame,
+                 lambda x: x
+                 ),
+                ('class_segmentation.jpeg',
+                 class_segmentation_frame,
+                 lambda event: event.class_segmentation_frame,
+                 lambda x: x
+                 ),
+                ('depth.jpeg',
+                 depth_frame,
+                 lambda event: event.depth_frame,
+                 lambda data: (255.0 / data.max() * (data - data.min())).astype(np.uint8)
+                 )
+            ]
+
+            for frame_filename, condition, frame_func, transform in frame_writes:
+                frame = frame_func(event)
+                if frame is not None:
+                    frame = transform(frame)
+                    im = Image.fromarray(frame)
+                    im.save(frame_filename)
+                else:
+                    print("No frame present, call initialize with the right parameters")
+
+            for o in event.metadata['objects']:
+                if o['visible']:
+                    visible_objects.append(o['objectId'])
+                    if o['openable']:
+                        if o['isOpen']:
+                            add_command(command_counter, 'CloseObject', objectId=o['objectId'])
+                        else:
+                            add_command(command_counter, 'OpenObject', objectId=o['objectId'])
+
+                    if o['toggleable']:
+                        add_command(command_counter, 'ToggleObjectOff', objectId=o['objectId'])
+
+                    if len(event.metadata['inventoryObjects']) > 0:
+                        inventoryObjectId = event.metadata['inventoryObjects'][0]['objectId']
+                        if o['receptacle'] and (not o['openable'] or o['isOpen']) and inventoryObjectId != o['objectId']:
+                            add_command(command_counter, 'PutObject', objectId=inventoryObjectId, receptacleObjectId=o['objectId'])
+                            add_command(command_counter, 'MoveHandAhead', moveMagnitude=0.1)
+                            add_command(command_counter, 'MoveHandBack', moveMagnitude=0.1)
+                            add_command(command_counter, 'MoveHandRight', moveMagnitude=0.1)
+                            add_command(command_counter, 'MoveHandLeft', moveMagnitude=0.1)
+                            add_command(command_counter, 'MoveHandUp', moveMagnitude=0.1)
+                            add_command(command_counter, 'MoveHandDown', moveMagnitude=0.1)
+                            add_command(command_counter, 'DropHandObject')
+
+                    elif o['pickupable']:
+                        add_command(command_counter, 'PickupObject', objectId=o['objectId'])
+
+            self._interact_commands = default_interact_commands.copy()
+            self._interact_commands.update(new_commands)
+
+            print(command_message)
+            print("Visible Objects:\n" + "\n".join(sorted(visible_objects)))
+
+            skip_keys = ['action', 'objectId']
+            for k in sorted(new_commands.keys()):
+                v = new_commands[k]
+                command_info = [k + ")", v['action']]
+                if 'objectId' in v:
+                    command_info.append(v['objectId'])
+
+                for a, av in v.items():
+                    if a in skip_keys:
+                        continue
+                    command_info.append("%s: %s" % (a, av))
+
+                print(' '.join(command_info))
 
     def multi_step_physics(self, action, timeStep=0.05, max_steps=20):
         events = []
@@ -636,16 +612,7 @@ class Controller(object):
 
         return events
 
-    def step(self, action=None, **action_args):
-
-        if type(action) is dict:
-            action = copy.deepcopy(action) # prevent changes from leaking
-        else:
-            action = dict(action=action)
-
-        raise_for_failure = action_args.pop('raise_for_failure', False)
-        action.update(action_args)
-
+    def step(self, action, raise_for_failure=False):
         if self.headless:
             action["renderImage"] = False
 
@@ -764,43 +731,36 @@ class Controller(object):
         else:
             url = None
             sha256_build = None
-            git_dir = os.path.normpath(os.path.dirname(os.path.realpath(__file__)) + "/../.git")
-            for commit_id in subprocess.check_output('git --git-dir=' + git_dir + ' log -n 10 --format=%H', shell=True).decode('ascii').strip().split("\n"):
-                arch = arch_platform_map[platform.system()]
+            try:
+                git_dir = os.path.normpath(os.path.dirname(os.path.realpath(__file__)) + "/../.git")
+                for commit_id in subprocess.check_output('git --git-dir=' + git_dir + ' log -n 10 --format=%H', shell=True).decode('ascii').strip().split("\n"):
+                    arch = arch_platform_map[platform.system()]
 
-                try:
-                    u = ai2thor.downloader.commit_build_url(arch, commit_id)
-                    if os.path.isfile(self.executable_path(url=u)):
-                        # don't need sha256 since we aren't going to download
-                        url = u
-                        break
-                    elif ai2thor.downloader.commit_build_exists(arch, commit_id):
+                    if ai2thor.downloader.commit_build_exists(arch, commit_id):
+                        url = ai2thor.downloader.commit_build_url(arch, commit_id)
                         sha256_build = ai2thor.downloader.commit_build_sha256(arch, commit_id)
-                        url = u
+                        print("Got build for %s: " % (arch, url))
                         break
-                except Exception:
-                    pass
+
+            except Exception:
+                pass
 
             if url is None:
                 raise Exception("Couldn't find a suitable build url for platform: %s" % platform.system())
 
-            # print("Got build for %s: " % (url))
-
             return (url, sha256_build)
 
-    def build_name(self, url=None):
-        if url is None:
-            url, _ = self.build_url()
-        return os.path.splitext(os.path.basename(url))[0]
+    def build_name(self):
+        return os.path.splitext(os.path.basename(self.build_url()[0]))[0]
 
-    def executable_path(self, url=None):
+    def executable_path(self):
 
         if self.local_executable_path is not None:
             return self.local_executable_path
 
         target_arch = platform.system()
 
-        bn = self.build_name(url)
+        bn = self.build_name()
         if target_arch == 'Linux':
             return os.path.join(self.releases_dir(), bn, bn)
         elif target_arch == 'Darwin':
@@ -817,76 +777,51 @@ class Controller(object):
         if platform.architecture()[0] != '64bit':
             raise Exception("Only 64bit currently supported")
 
-        url, sha256_build = self.build_url()
+        url,sha256_build = self.build_url()
         tmp_dir = os.path.join(self.base_dir(), 'tmp')
         makedirs(self.releases_dir())
         makedirs(tmp_dir)
-        download_lf = open(os.path.join(tmp_dir, self.build_name(url) + ".lock"), "w")
-        try:
-            fcntl.flock(download_lf, fcntl.LOCK_EX)
 
-            if not os.path.isfile(self.executable_path()):
-                zip_data = ai2thor.downloader.download(
-                    url,
-                    self.build_name(),
-                    sha256_build)
+        if not os.path.isfile(self.executable_path()):
+            zip_data = ai2thor.downloader.download(
+                url,
+                self.build_name(),
+                sha256_build)
 
-                z = zipfile.ZipFile(io.BytesIO(zip_data))
-                # use tmpdir instead or a random number
-                extract_dir = os.path.join(tmp_dir, self.build_name())
-                logger.debug("Extracting zipfile %s" % os.path.basename(url))
-                z.extractall(extract_dir)
-                os.rename(extract_dir, os.path.join(self.releases_dir(), self.build_name()))
-                # we can lose the executable permission when unzipping a build
-                os.chmod(self.executable_path(), 0o755)
-            else:
-                logger.debug("%s exists - skipping download" % self.executable_path())
-
-        finally:
-            fcntl.flock(download_lf, fcntl.LOCK_UN)
-            download_lf.close()
+            z = zipfile.ZipFile(io.BytesIO(zip_data))
+            # use tmpdir instead or a random number
+            extract_dir = os.path.join(tmp_dir, self.build_name())
+            logger.debug("Extracting zipfile %s" % os.path.basename(url))
+            z.extractall(extract_dir)
+            os.rename(extract_dir, os.path.join(self.releases_dir(), self.build_name()))
+            # we can lose the executable permission when unzipping a build
+            os.chmod(self.executable_path(), 0o755)
+        else:
+            logger.debug("%s exists - skipping download" % self.executable_path())
 
     def start(
             self,
             port=0,
             start_unity=True,
-            width=300,
-            height=300,
-            x_display=None,
-            host='127.0.0.1',
-            player_screen_width=None,
-            player_screen_height=None
-    ):
+            player_screen_width=300,
+            player_screen_height=300,
+            x_display=None):
 
         if 'AI2THOR_VISIBILITY_DISTANCE' in os.environ:
             import warnings
             warnings.warn("AI2THOR_VISIBILITY_DISTANCE environment variable is deprecated, use \
                 the parameter visibilityDistance parameter with the Initialize action instead")
 
-        if player_screen_width is not None:
-            warnings.warn("'player_screen_width' parameter is deprecated, use the 'width'"
-                          " parameter instead.")
-            width = player_screen_width
-
-        if player_screen_height is not None:
-            warnings.warn("'player_screen_height' parameter is deprecated, use the 'height'"
-                          " parameter instead.")
-            height = player_screen_height
-
-        if height < 300 or width < 300:
+        if player_screen_height < 300 or player_screen_width < 300:
             raise Exception("Screen resolution must be >= 300x300")
 
         if self.server_thread is not None:
-            import warnings
-            warnings.warn('start method depreciated. The server started when the Controller was initialized.')
-
-            # Stops the current server and creates a new one. This is done so
-            # that the arguments passed in will be used on the server.
-            self.stop()
+            raise Exception("server has already been started - cannot start more than once")
 
         env = os.environ.copy()
 
         image_name = None
+        host = '127.0.0.1'
 
         if self.docker_enabled:
             self.check_docker()
@@ -896,12 +831,7 @@ class Controller(object):
             self.request_queue,
             self.response_queue,
             host,
-            port=port,
-            depth_format=self.depth_format,
-            add_depth_noise=self.add_depth_noise,
-            width=width,
-            height=height
-        )
+            port=port)
 
         _, port = self.server.wsgi_server.socket.getsockname()
 
@@ -931,7 +861,7 @@ class Controller(object):
 
             unity_thread = threading.Thread(
                 target=self._start_unity_thread,
-                args=(env, width, height, host, port, image_name))
+                args=(env, player_screen_width, player_screen_height, host, port, image_name))
             unity_thread.daemon = True
             unity_thread.start()
 
@@ -1440,10 +1370,12 @@ class BFSController(Controller):
             y=search_point.start_position['y'],
             z=search_point.start_position['z']))
 
+        assert event.metadata['lastActionSuccess']
+        move_vec = search_point.move_vector
+        move_vec['moveMagnitude'] = self.grid_size
+        event = self.step(dict(action='Move', **move_vec))
+
         if event.metadata['lastActionSuccess']:
-            move_vec = search_point.move_vector
-            move_vec['moveMagnitude'] = self.grid_size
-            event = self.step(dict(action='Move', **move_vec))
             if event.metadata['agent']['position']['y'] > 1.3:
                 #pprint(search_point.start_position)
                 #pprint(search_point.move_vector)
